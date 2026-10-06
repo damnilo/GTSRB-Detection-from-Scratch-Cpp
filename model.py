@@ -3,7 +3,7 @@ import time
 
 from load_dataset import NUM_CATEGORIES, IMG_WIDTH, IMG_HEIGHT, load_train_data
 os.add_dll_directory(r"C:\Users\HP\Vestacka Projekat\build")
-os.add_dll_directory(r"C:\msys64\ucrt64\bin")  # MSYS2/MinGW runtime (libstdc++, libgomp, etc.) for the compiled .pyd
+os.add_dll_directory(r"C:\msys64\ucrt64\bin")  
 
 import sys
 sys.path.append(r"C:\Users\HP\Vestacka Projekat\build")
@@ -43,7 +43,7 @@ def create_network():
     net.addLayer(cpp.MaxPool2D(2, 2))
 
     net.addLayer(cpp.Flatten())
-    net.addLayer(cpp.Dense(32 * 8 * 8, 128))  # 32x8x8 matches the spatial size after two stride-2 pools on 32x32 input
+    net.addLayer(cpp.Dense(32 * 8 * 8, 128)) 
     net.addLayer(cpp.ReLU())
 
     dropout_layer = cpp.Dropout(0.3)
@@ -53,7 +53,7 @@ def create_network():
     net.addLayer(cpp.SoftMax())
 
     loss = cpp.CrossEntropy()
-    optimizer = cpp.SGD(0.02, 0.95)
+    optimizer = cpp.SGD(0.015, 0.95)
 
     return net, loss, optimizer, dropout_layer
 
@@ -111,8 +111,6 @@ def train():
     start_time = time.time()
     best_acc = 0.0
 
-    # Sqrt-dampened, capped inverse-frequency class weights for oversampling rare classes
-    # without letting the rarest one or two classes dominate batches.
     class_counts = np.bincount(y_train, minlength=NUM_CATEGORIES)
     class_weights = 1.0 / np.sqrt(class_counts)
     class_weights = np.minimum(class_weights, np.median(class_weights) * 3)
@@ -123,9 +121,6 @@ def train():
     BATCH_SIZE = 64
 
     for epoch in range(EPOCHS):
-        # Sampling WITH replacement is essential here — without it, every index
-        # still gets drawn exactly once regardless of weight, silently negating
-        # the oversampling entirely.
         permutation = np.random.choice(len(X_train), size=len(X_train), replace=True, p=sample_weights)
         epoch_loss = 0.0
         batches = 0
@@ -153,10 +148,10 @@ def train():
             clip_gradients(grads, clip_value=5.0)
             optimizer.update(params, grads)
 
-        dropout_layer.setTraining(False)  # Disable dropout for evaluation
+        dropout_layer.setTraining(False) 
         avg_loss = epoch_loss / batches
         val_acc = evaluate(net, X_val, y_val)
-        train_check_acc = evaluate(net, X_train[:2000], y_train[:2000])  # Diagnostic: train/val gap monitoring
+        train_check_acc = evaluate(net, X_train[:2000], y_train[:2000]) 
         print("Train accuracy:", train_check_acc)
         print(f"Epoch {epoch+1}/{EPOCHS}, Validation Accuracy: {val_acc * 100:.2f}%, Loss: {avg_loss:.4f}, Time: {time.time() - start_time:.2f}s")
 
@@ -164,7 +159,7 @@ def train():
             best_acc = val_acc
             cpp.Serialization.saveNetwork(net, "best_model.bin")
         else:
-            optimizer.setLearningRate(optimizer.getLearningRate() * 0.5)  # Reduce-on-plateau
+            optimizer.setLearningRate(optimizer.getLearningRate() * 0.5) 
 
 
 def evaluate(net, X_val, y_val):
