@@ -1,5 +1,5 @@
 #pragma once
-#include "Tensor.h"
+#include "Utils/include/Tensor.h"
 
 // Abstract base class for loss functions (currently just CrossEntropy).
 // Unlike Layer, forward() takes both predictions and targets, and backward()

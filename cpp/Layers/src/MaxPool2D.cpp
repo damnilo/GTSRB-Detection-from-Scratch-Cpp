@@ -1,4 +1,4 @@
-#include "MaxPool2D.h"
+#include "Layers/include/MaxPool2D.h"
 # include <limits>
 
 MaxPool2D::MaxPool2D(size_t pool_size, size_t stride)

@@ -1,5 +1,5 @@
 #pragma once
-#include "Layer.h"
+#include "Layers/include/Layer.h"
 #include <vector>
 
 // 2D convolution layer, implemented via the im2col/matmul/col2im trick: the

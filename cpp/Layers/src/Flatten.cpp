@@ -1,4 +1,4 @@
-#include "Flatten.h"
+#include "Layers/include/Flatten.h"
 
 // Collapses all dimensions after the batch axis into one, preserving element order
 // (since the underlying buffer is already row-major / contiguous, this is just a copy).

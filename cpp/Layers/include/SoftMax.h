@@ -1,5 +1,5 @@
 #pragma once
-#include "Layer.h"
+#include "Layers/include/Layer.h"
 
 // Softmax activation, applied row-wise over a 2D (N, C) tensor of class logits.
 // Typically the final layer before CrossEntropy loss.

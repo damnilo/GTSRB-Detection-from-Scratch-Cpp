@@ -1,5 +1,5 @@
 #pragma once
-#include "Layer.h"
+#include "Layers/include/Layer.h"
 
 // Fully-connected (linear) layer: output = input @ weights + biases.
 // Expects 2D input of shape (N, inputSize); produces (N, outputSize).

@@ -1,4 +1,4 @@
-#include "SoftMax.h"
+#include "Layers/include/SoftMax.h"
 #include <cmath>
 #include <limits>
 #include <algorithm>

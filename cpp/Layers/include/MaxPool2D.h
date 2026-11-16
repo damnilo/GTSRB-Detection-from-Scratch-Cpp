@@ -1,5 +1,5 @@
 #pragma once
-#include "Layer.h"
+#include "Layers/include/Layer.h"
 #include <vector>
 
 // 2D max pooling: downsamples each (pool_size x pool_size) window to its max value,
