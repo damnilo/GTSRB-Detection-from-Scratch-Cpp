@@ -1,0 +1,16 @@
+count,true_id,true_name,pred_id,pred_name
+61,7,Speed limit (100km/h),8,Speed limit (120km/h)
+20,5,Speed limit (80km/h),2,Speed limit (50km/h)
+14,26,Traffic signals,25,Road work
+13,30,Beware of ice/snow,20,Dangerous curve right
+13,27,Pedestrians,29,Bicycles crossing
+13,5,Speed limit (80km/h),3,Speed limit (60km/h)
+13,1,Speed limit (30km/h),2,Speed limit (50km/h)
+12,27,Pedestrians,2,Speed limit (50km/h)
+12,3,Speed limit (60km/h),5,Speed limit (80km/h)
+11,22,Bumpy road,26,Traffic signals
+11,8,Speed limit (120km/h),5,Speed limit (80km/h)
+11,7,Speed limit (100km/h),5,Speed limit (80km/h)
+11,0,Speed limit (20km/h),8,Speed limit (120km/h)
+10,25,Road work,11,Right-of-way at intersection
+10,17,No entry,18,General caution

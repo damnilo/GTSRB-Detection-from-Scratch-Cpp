@@ -1,0 +1,23 @@
+{
+  "test_images": 12630,
+  "correct_predictions": 11994,
+  "accuracy": 0.9496437054631829,
+  "macro_precision": 0.9310383759806058,
+  "macro_recall": 0.926093772777797,
+  "macro_f1": 0.9256694395170063,
+  "weighted_precision": 0.9511265761032239,
+  "weighted_recall": 0.9496437054631828,
+  "weighted_f1": 0.9491174985528437,
+  "protocol": "training-set per-channel mean/std",
+  "test_set_normalization": {
+    "test_images": 12630,
+    "correct_predictions": 11983,
+    "accuracy": 0.9487727632620744,
+    "macro_precision": 0.9300968515711645,
+    "macro_recall": 0.9242677488971727,
+    "macro_f1": 0.9241177058611817,
+    "weighted_precision": 0.9505725899947199,
+    "weighted_recall": 0.9487727632620744,
+    "weighted_f1": 0.9482601681197005
+  }
+}
