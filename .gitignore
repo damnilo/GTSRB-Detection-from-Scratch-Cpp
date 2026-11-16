@@ -6,5 +6,5 @@ __pycache__/
 .vscode/
 main.py
 best_model.bin
-cpp/bindings.cpp
 dataset/
+IMPROVEMENT.md
