@@ -127,11 +127,7 @@ Run:
 python model.py
 ```
 
-The best-performing model is automatically saved as:
-
-```
-best_model.bin
-```
+The best-performing model is automatically saved as `best_model.bin`. Training also writes `checkpoints/norm.npz` (per-channel mean and standard deviation of the training split) and `checkpoints/config.json`.
 
 ---
 
@@ -143,7 +139,13 @@ Evaluate the trained model on the official test dataset:
 python test.py
 ```
 
-`test.py` loads `best_model.bin`, disables dropout, and prints test accuracy. The figures below use that same procedure: one forward pass over the official GTSRB test set.
+`test.py` loads `best_model.bin`, standardizes images with `checkpoints/norm.npz`, disables dropout, and prints test accuracy.
+
+```bash
+python eval.py
+```
+
+`eval.py` runs the same protocol and writes `results/test_metrics.json`, `results/per_class.csv`, `results/confusion.csv`, `results/confusion.png`, and `results/top_confusions.csv`. It also reports accuracy under the old test-set normalization so the two protocols can be compared. The figures below were produced by the old protocol.
 
 ---
 
@@ -151,13 +153,15 @@ python test.py
 
 Checkpoint: `best_model.bin`, loaded into the architecture in `create_network()`.
 
-Protocol, matching `test.py`:
+Current `test.py` protocol:
 
 * 12,630 images from `dataset/Test.csv` (official GTSRB test split)
 * resized to 32×32, converted from BGR to RGB, scaled to `[0, 1]`, stored as `(N, C, H, W)`
-* standardized per channel with the mean and standard deviation of the test set
+* standardized per channel with the training-set mean and standard deviation (`checkpoints/norm.npz`)
 * dropout in evaluation mode (pass-through)
 * predicted class is the argmax of the softmax output
+
+The table below was measured when the test set was standardized with its own mean and standard deviation. Replace it with the training-set-normalization numbers from `results/test_metrics.json` after running `python eval.py`.
 
 ### Overall results
 
@@ -344,7 +348,6 @@ Rows are the true class, columns are the predicted class. The first column of ea
 ## Future Improvements
 
 * Adam optimizer
-* Learning rate scheduling
 * Data augmentation
 * GPU acceleration
 * Additional activation functions
