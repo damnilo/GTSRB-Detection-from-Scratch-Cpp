@@ -1,6 +1,6 @@
 #pragma once
-#include "Tensor.h"
-#include "Loss.h"
+#include "Utils/include/Tensor.h"
+#include "Loss/include/Loss.h"
 
 // Categorical cross-entropy loss for one-hot encoded targets, expected to be
 // paired with a preceding SoftMax layer (predictions should already be probabilities).

@@ -1,4 +1,4 @@
-#include "Dense.h"
+#include "Layers/include/Dense.h"
 #include <cmath>
 #include <iostream>
 

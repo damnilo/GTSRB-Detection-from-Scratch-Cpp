@@ -1,4 +1,4 @@
-#include "CrossEntropy.h"
+#include "Loss/include/CrossEntropy.h"
 #include <cmath>
 
 // Computes -sum(target * log(prediction)) per sample, averaged over the batch.

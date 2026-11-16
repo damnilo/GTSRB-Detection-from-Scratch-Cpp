@@ -4,20 +4,20 @@
 #include <pybind11/stl.h>
 #include <pybind11/numpy.h>
 
-#include "Tensor.h"
-#include "Layer.h"
-#include "Dense.h"
-#include "ReLU.h"
-#include "Conv2D.h"
-#include "Flatten.h"
-#include "SoftMax.h"
-#include "CrossEntropy.h"
-#include "Network.h"
-#include "SGD.h"
-#include "Serialization.h"
-#include "MaxPool2D.h"
-#include "Loss.h"
-#include "Dropout.h"
+#include "Utils/include/Tensor.h"
+#include "Utils/include/Serialization.h"
+#include "Layers/include/Layer.h"
+#include "Layers/include/Dense.h"
+#include "Layers/include/ReLU.h"
+#include "Layers/include/Conv2D.h"
+#include "Layers/include/Flatten.h"
+#include "Layers/include/SoftMax.h"
+#include "Layers/include/Network.h"
+#include "Layers/include/MaxPool2D.h"
+#include "Layers/include/Dropout.h"
+#include "Loss/include/CrossEntropy.h"
+#include "Loss/include/Loss.h"
+#include "Optimizers/include/SGD.h"
 
 namespace py = pybind11;
 

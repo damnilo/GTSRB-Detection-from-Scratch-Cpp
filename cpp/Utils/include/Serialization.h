@@ -1,5 +1,5 @@
 #pragma once
-#include "Network.h"
+#include "Layers/include/Network.h"
 #include <string>
 
 // Saves/loads a Network's parameters (weights + biases of every layer) to/from

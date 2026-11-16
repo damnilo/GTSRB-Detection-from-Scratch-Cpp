@@ -1,5 +1,5 @@
 #pragma once
-#include "Layer.h"
+#include "Layers/include/Layer.h"
 #include <vector>
 
 // Reshapes a multi-dimensional tensor (e.g. (N, C, H, W) from a conv stack)

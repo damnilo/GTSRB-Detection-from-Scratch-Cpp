@@ -1,4 +1,4 @@
-#include "Network.h"
+#include "Layers/include/Network.h"
 
 void Network::addLayer(std::shared_ptr<Layer> layer) {
     layers.push_back(layer);

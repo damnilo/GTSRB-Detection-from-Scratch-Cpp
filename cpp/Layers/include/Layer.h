@@ -1,6 +1,6 @@
 #ifndef LAYER_H
 #define LAYER_H
-#include "Tensor.h"
+#include "Utils/include/Tensor.h"
 #include <vector>
 
 // Abstract base class for every layer in the network (Dense, Conv2D, ReLU,

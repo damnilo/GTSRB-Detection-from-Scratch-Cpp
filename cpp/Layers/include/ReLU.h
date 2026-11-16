@@ -1,5 +1,5 @@
 #pragma once
-#include "Layer.h"
+#include "Layers/include/Layer.h"
 
 // Elementwise ReLU activation: output = max(0, input). No learnable parameters.
 class ReLU : public Layer

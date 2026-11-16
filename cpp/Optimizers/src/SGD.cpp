@@ -1,4 +1,4 @@
-#include "SGD.h"
+#include "Optimizers/include/SGD.h"
 
 SGD::SGD(float learningRate, float momentum)
     : learningRate(learningRate), momentum(momentum) {}

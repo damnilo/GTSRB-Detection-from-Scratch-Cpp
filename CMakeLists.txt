@@ -11,19 +11,20 @@ find_package(pybind11 REQUIRED)
 find_package(OpenMP REQUIRED)
 pybind11_add_module(cpp
     ${SOURCES}
-    cpp/src/Tensor.cpp
-    cpp/src/Network.cpp
-    cpp/src/Dense.cpp
-    cpp/src/Conv2D.cpp
-    cpp/src/ReLU.cpp
-    cpp/src/SoftMax.cpp
-    cpp/src/Flatten.cpp
-    cpp/src/MaxPool2D.cpp
-    cpp/src/SGD.cpp
-    cpp/src/CrossEntropy.cpp
-    cpp/src/Serialization.cpp
-    cpp/src/Dropout.cpp
+    cpp/Utils/src/Tensor.cpp
+    cpp/Utils/src/Serialization.cpp
+    cpp/Layers/src/Network.cpp
+    cpp/Layers/src/Dense.cpp
+    cpp/Layers/src/Conv2D.cpp
+    cpp/Layers/src/ReLU.cpp
+    cpp/Layers/src/SoftMax.cpp
+    cpp/Layers/src/Flatten.cpp
+    cpp/Layers/src/MaxPool2D.cpp
+    cpp/Layers/src/Dropout.cpp
+    cpp/Optimizers/src/SGD.cpp
+    cpp/Loss/src/CrossEntropy.cpp
 )
 
-target_include_directories(cpp PRIVATE cpp/include)
+# Headers are included as "Layers/include/...", "Utils/include/...", etc.
+target_include_directories(cpp PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/cpp)
 target_link_libraries(cpp PRIVATE OpenMP::OpenMP_CXX)

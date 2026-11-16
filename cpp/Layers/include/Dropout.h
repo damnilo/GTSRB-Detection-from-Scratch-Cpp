@@ -1,5 +1,5 @@
 #pragma once
-#include "Layer.h"
+#include "Layers/include/Layer.h"
 
 // Inverted dropout regularization layer. During training, randomly zeroes a
 // fraction (`rate`) of activations and scales the survivors by 1/(1-rate) so
