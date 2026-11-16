@@ -3,7 +3,14 @@
 
 namespace {
     // thread_local so this would stay safe if training were ever parallelized across layers.
-    thread_local std::mt19937 rng(std::random_device{}());
+    std::mt19937& dropoutRng() {
+        thread_local std::mt19937 generator{std::random_device{}()};
+        return generator;
+    }
+}
+
+void Dropout::seed(unsigned int seed) {
+    dropoutRng().seed(seed);
 }
 
 Dropout::Dropout(float rate) : rate(rate), training(true) {}
@@ -20,7 +27,7 @@ Tensor Dropout::forward(const Tensor& input) {
     const float scale = 1.0f / (1.0f - rate);
 
     for (size_t i = 0; i < input.size(); ++i) {
-        bool keep = dist(rng) > rate;
+        bool keep = dist(dropoutRng()) > rate;
         maskCache[i] = keep ? scale : 0.0f;
     }
 
