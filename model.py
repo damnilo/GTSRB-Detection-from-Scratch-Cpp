@@ -1,16 +1,111 @@
+import json
 import os
-import time
-
-from load_dataset import NUM_CATEGORIES, IMG_WIDTH, IMG_HEIGHT, load_train_data
-os.add_dll_directory(r"C:\Users\HP\Vestacka Projekat\build")
-os.add_dll_directory(r"C:\msys64\ucrt64\bin")  
-
+import random
 import sys
-sys.path.append(r"C:\Users\HP\Vestacka Projekat\build")
+import time
+from pathlib import Path
 
-import cv2
+from load_dataset import NUM_CATEGORIES, load_train_data
+
+
+ROOT = Path(__file__).resolve().parent
+CHECKPOINT_DIR = ROOT / "checkpoints"
+NORM_PATH = CHECKPOINT_DIR / "norm.npz"
+CONFIG_PATH = CHECKPOINT_DIR / "config.json"
+
+EPOCHS = 20
+BATCH_SIZE = 64
+SEED = 42
+LR = 0.015
+MOMENTUM = 0.95
+WEIGHT_DECAY = 1e-4
+CLIP = 5.0
+
+
+def add_cpp_to_path():
+    """Put the local build directory on the module path before importing cpp.
+
+    On Windows, OpenMP lives in the MSYS2 toolchain. Set MSYS2_BIN to that
+    bin directory when it is not C:\\msys64\\ucrt64\\bin and not already on PATH.
+    The project build itself is always <repo>/build.
+    """
+    build = ROOT / "build"
+    if sys.platform == "win32" and hasattr(os, "add_dll_directory"):
+        if build.is_dir():
+            os.add_dll_directory(str(build))
+        msys = os.environ.get("MSYS2_BIN")
+        if not msys:
+            default_msys = Path(r"C:\msys64\ucrt64\bin")
+            if default_msys.is_dir():
+                msys = str(default_msys)
+        if msys:
+            os.add_dll_directory(msys)
+    sys.path.insert(0, str(build))
+
+
+add_cpp_to_path()
+
 import numpy as np
 import cpp
+
+
+def seed_everything(seed):
+    """Seed Python, NumPy, weight init, and dropout before the network is built."""
+    random.seed(seed)
+    np.random.seed(seed)
+    cpp.seed(seed)
+
+
+def standardize(X, mean, std):
+    """Per-channel standardization. mean/std broadcast over NCHW as (1, C, 1, 1)."""
+    return (X - mean) / std
+
+
+def save_norm(mean, std):
+    CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
+    np.savez(str(NORM_PATH), mean=np.asarray(mean, dtype=np.float32), std=np.asarray(std, dtype=np.float32))
+
+
+def save_config():
+    config = {
+        "architecture": (
+            "Conv 3->16 k3 s1 p1, ReLU, MaxPool 2; "
+            "Conv 16->32 k3 s1 p1, ReLU, MaxPool 2; "
+            "Flatten; Dense 2048->128; ReLU; Dropout 0.3; "
+            "Dense 128->43; SoftMax"
+        ),
+        "lr": LR,
+        "momentum": MOMENTUM,
+        "weight_decay": WEIGHT_DECAY,
+        "epochs": EPOCHS,
+        "batch_size": BATCH_SIZE,
+        "seed": SEED,
+        "clip_value": CLIP,
+        "image_size": 32,
+        "num_classes": NUM_CATEGORIES,
+    }
+    CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
+    CONFIG_PATH.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+
+
+def load_norm_stats():
+    """Load training-set mean/std. If the file is missing, recompute it from the train split.
+
+    Recomputing matches an existing best_model.bin only when os.listdir returns
+    training images in the same order as the run that produced those weights.
+    """
+    if not NORM_PATH.is_file():
+        print("checkpoints/norm.npz was not found. Recomputing mean/std from the training split.")
+        print("This matches best_model.bin only if training files are listed in the same order as when that checkpoint was trained.")
+        X_train, _, _, _ = load_train_data()
+        X_train = X_train.astype(np.float32)
+        mean = np.mean(X_train, axis=(0, 2, 3), keepdims=True)
+        std = np.std(X_train, axis=(0, 2, 3), keepdims=True)
+        save_norm(mean, std)
+        return mean, std
+
+    data = np.load(NORM_PATH)
+    return data["mean"], data["std"]
 
 
 def numpy_to_tensor(np_array):
@@ -43,17 +138,16 @@ def create_network():
     net.addLayer(cpp.MaxPool2D(2, 2))
 
     net.addLayer(cpp.Flatten())
-    net.addLayer(cpp.Dense(32 * 8 * 8, 128)) 
+    net.addLayer(cpp.Dense(32 * 8 * 8, 128))
     net.addLayer(cpp.ReLU())
 
-    dropout_layer = cpp.Dropout(0.3)
-    net.addLayer(dropout_layer)
+    net.addLayer(cpp.Dropout(0.3))
 
     net.addLayer(cpp.Dense(128, NUM_CATEGORIES))
     net.addLayer(cpp.SoftMax())
 
     loss = cpp.CrossEntropy()
-    optimizer = cpp.SGD(0.015, 0.95)
+    optimizer = cpp.SGD(LR, MOMENTUM)
 
     return net, loss, optimizer, dropout_layer
 
@@ -82,6 +176,8 @@ def train():
     Main training loop. Key design points:
       - Inputs are normalized using per-channel mean/std computed from the
         training set only (val set reuses train's statistics to avoid leakage).
+        Those statistics are written to checkpoints/norm.npz before training.
+      - Weight init, dropout masks, and the NumPy oversampling draw are seeded.
       - Class-imbalance is addressed via sqrt-dampened inverse-frequency
         oversampling (capped at 3x the median weight) — this softens the more
         aggressive raw 1/count weighting, which was found to over-correct rare
@@ -92,6 +188,8 @@ def train():
         accuracy (a simple reduce-on-plateau schedule); the best model (by val
         accuracy) is checkpointed to disk after every improving epoch.
     """
+    seed_everything(SEED)
+
     X_train, y_train, X_val, y_val = load_train_data()
     y_train_one_hot = np.eye(NUM_CATEGORIES)[y_train]
 
@@ -100,9 +198,11 @@ def train():
 
     mean = np.mean(X_train, axis=(0, 2, 3), keepdims=True)
     std = np.std(X_train, axis=(0, 2, 3), keepdims=True)
+    save_norm(mean, std)
+    save_config()
 
-    X_train = (X_train - mean) / std
-    X_val = (X_val - mean) / std
+    X_train = standardize(X_train, mean, std)
+    X_val = standardize(X_val, mean, std)
 
     net, loss, optimizer, dropout_layer = create_network()
 
@@ -116,9 +216,6 @@ def train():
     class_weights = np.minimum(class_weights, np.median(class_weights) * 3)
     sample_weights = class_weights[y_train]
     sample_weights /= sample_weights.sum()
-
-    EPOCHS = 20
-    BATCH_SIZE = 64
 
     for epoch in range(EPOCHS):
         permutation = np.random.choice(len(X_train), size=len(X_train), replace=True, p=sample_weights)
@@ -145,13 +242,13 @@ def train():
 
             grad_loss = loss.backward()
             net.backward(grad_loss)
-            clip_gradients(grads, clip_value=5.0)
+            clip_gradients(grads, clip_value=CLIP)
             optimizer.update(params, grads)
 
-        dropout_layer.setTraining(False) 
+        dropout_layer.setTraining(False)
         avg_loss = epoch_loss / batches
         val_acc = evaluate(net, X_val, y_val)
-        train_check_acc = evaluate(net, X_train[:2000], y_train[:2000]) 
+        train_check_acc = evaluate(net, X_train[:2000], y_train[:2000])
         print("Train accuracy:", train_check_acc)
         print(f"Epoch {epoch+1}/{EPOCHS}, Validation Accuracy: {val_acc * 100:.2f}%, Loss: {avg_loss:.4f}, Time: {time.time() - start_time:.2f}s")
 
@@ -159,7 +256,7 @@ def train():
             best_acc = val_acc
             cpp.Serialization.saveNetwork(net, "best_model.bin")
         else:
-            optimizer.setLearningRate(optimizer.getLearningRate() * 0.5) 
+            optimizer.setLearningRate(optimizer.getLearningRate() * 0.5)
 
 
 def evaluate(net, X_val, y_val):
