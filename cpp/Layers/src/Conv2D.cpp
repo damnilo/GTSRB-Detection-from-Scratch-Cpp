@@ -99,8 +99,8 @@ Tensor Conv2D::col2im(const Tensor& col, const std::vector<size_t>& inputShape, 
     return gradInput;
 }
 
-// He-style initialization scaled by fan-in/fan-out across the unrolled kernel size,
-// appropriate for the ReLU activations this layer typically feeds into.
+// Xavier/Glorot uniform initialization over the unrolled kernel:
+// limit = sqrt(6 / (fan_in + fan_out)). This is not He init.
 Conv2D::Conv2D(size_t in_channels, size_t out_channels, size_t kernel_size, size_t stride, size_t padding)
     : in_channels(in_channels), out_channels(out_channels), kernel_size(kernel_size), stride(stride), padding(padding),
       weights(Tensor::zeros({out_channels, in_channels * kernel_size * kernel_size})),

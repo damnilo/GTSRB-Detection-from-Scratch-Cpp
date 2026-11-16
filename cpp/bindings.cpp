@@ -1,5 +1,4 @@
 // pybind11 bindings exposing the C++ library as the `cpp` Python extension module.
-// Excluded from version control via .gitignore — see project notes.
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 #include <pybind11/numpy.h>
@@ -23,6 +22,12 @@ namespace py = pybind11;
 
 PYBIND11_MODULE(cpp, m) {
     m.doc() = "Neural Network Library Bindings";
+    // One seed for weight init and one for dropout masks. Both generators are
+    // reseeded, but they stay independent streams.
+    m.def("seed", [](unsigned int seed) {
+        Tensor::seed(seed);
+        Dropout::seed(seed);
+    }, py::arg("seed"));
     m.def("createNetwork", []() { return new Network(); }, py::return_value_policy::take_ownership);
 
     py::class_<Tensor>(m, "Tensor")
