@@ -14,8 +14,7 @@ meta_set = 'dataset/Meta'
 IMG_HEIGHT = 32
 IMG_WIDTH = 32
 channels = 3
-
-NUM_CATEGORIES = len(os.listdir(train_set))
+NUM_CATEGORIES = 43
 
 classes = { 
     0:'Speed limit (20km/h)',
