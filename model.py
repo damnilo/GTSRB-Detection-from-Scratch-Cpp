@@ -141,7 +141,8 @@ def create_network():
     net.addLayer(cpp.Dense(32 * 8 * 8, 128))
     net.addLayer(cpp.ReLU())
 
-    net.addLayer(cpp.Dropout(0.3))
+    dropout_layer = cpp.Dropout(0.3);
+    net.addLayer(dropout_layer)
 
     net.addLayer(cpp.Dense(128, NUM_CATEGORIES))
     net.addLayer(cpp.SoftMax())
