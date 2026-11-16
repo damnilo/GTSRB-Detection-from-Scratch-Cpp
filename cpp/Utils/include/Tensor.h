@@ -38,6 +38,10 @@ public:
     const float& operator[](size_t index) const;
 
     void fill(float value);             //Sets every element to a constant
+    // Seeds the generator used by every subsequent randomize() call. Call once,
+    // before constructing layers: passing the same seed into each randomize()
+    // would give every layer identical weights.
+    static void seed(unsigned int seed);
     void randomize(float minValue = -1.0f, float maxValue = 1.0f); //Uniform random init, used for weight initialization
     
     // Direct access to the underlying flat buffer — used for bulk numpy interop

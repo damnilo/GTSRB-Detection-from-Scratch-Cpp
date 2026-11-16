@@ -4,6 +4,15 @@
 #include <numeric>
 #include <algorithm>
 
+namespace {
+    // One generator for every Tensor::randomize() call, so layer constructors
+    // consume a single deterministic stream after Tensor::seed().
+    std::mt19937& tensorRng() {
+        static std::mt19937 generator{std::random_device{}()};
+        return generator;
+    }
+}
+
 Tensor::Tensor(){
     // Default-constructed tensor has empty shape and empty data — a valid but
     // "unset" state, used as a placeholder member before a real shape is known.
@@ -88,15 +97,17 @@ void Tensor::fill(float value) {
     std::fill(data.begin(), data.end(), value);
 }
 
+void Tensor::seed(unsigned int seed) {
+    tensorRng().seed(seed);
+}
+
 // Used for weight initialization. Each layer constructor controls the actual
-// [minValue, maxValue] range (e.g. Xavier/He bounds), this just fills uniformly within it.
+// [minValue, maxValue] range (Xavier uniform bounds), this just fills uniformly within it.
 void Tensor::randomize(float minValue, float maxValue) {
-    std::random_device rd;
-    std::mt19937 gen(rd());
     std::uniform_real_distribution<float> dis(minValue, maxValue);
 
     for(auto& d: data){
-        d = dis(gen);
+        d = dis(tensorRng());
     }
 }
 

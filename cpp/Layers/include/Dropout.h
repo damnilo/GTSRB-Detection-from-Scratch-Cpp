@@ -15,6 +15,10 @@ private:
 public:
     explicit Dropout(float rate);
 
+    // Seeds the generator that draws dropout masks. Independent from Tensor::seed,
+    // so weight initialization does not shift the mask stream.
+    static void seed(unsigned int seed);
+
     Tensor forward(const Tensor& input) override;
     Tensor backward(const Tensor& gradOutput) override;
 

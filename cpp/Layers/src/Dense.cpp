@@ -2,8 +2,8 @@
 #include <cmath>
 #include <iostream>
 
-// He-style fan-in/fan-out uniform initialization, scaled for ReLU-friendly variance.
-// Biases start at zero, which is standard.
+// Xavier/Glorot uniform initialization: limit = sqrt(6 / (fan_in + fan_out)).
+// This is not He init (that would be sqrt(6 / fan_in)). Biases start at zero.
 Dense::Dense(size_t inputSize, size_t outputSize)
     : inputSize(inputSize), outputSize(outputSize),
       weights({inputSize, outputSize}),
