@@ -174,7 +174,7 @@ Tensor Conv2D::backward(const Tensor& gradOutput) {
         }
     }
 
-    gradWeights = dOutCol.transpose().matmul(colCache); // (out_channels, rowSize)
+    gradWeights = dOutCol.matmulTransposedLeft(colCache); // (out_channels, rowSize)
     gradBiases = dOutCol.sum(0);                          // (out_channels)
 
     Tensor dCol = dOutCol.matmul(weights);                // (N*outH*outW, rowSize) — no transpose here, intentional
