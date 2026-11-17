@@ -15,7 +15,16 @@ import cv2
 import numpy as np
 
 from load_dataset import NUM_CATEGORIES, classes
-from model import SEED, create_network, evaluate_with_confusion, load_norm_stats, seed_everything, standardize
+from model import (
+    SEED,
+    create_network,
+    evaluate_with_confusion,
+    load_batch_norm,
+    load_norm_stats,
+    seed_everything,
+    set_training,
+    standardize,
+)
 from test import load_test_data
 
 import cpp
@@ -111,9 +120,10 @@ def public_metrics(scores):
 
 def main():
     seed_everything(SEED)
-    net, _, _, dropout = create_network()
+    net, _, _, dropout, batch_norms = create_network()
     cpp.Serialization.loadNetwork(net, "best_model.bin")
-    dropout.setTraining(False)
+    load_batch_norm(batch_norms)
+    set_training(dropout, batch_norms, False)
 
     X_test, y_test = load_test_data()
     mean_test = np.mean(X_test, axis=(0, 2, 3), keepdims=True)

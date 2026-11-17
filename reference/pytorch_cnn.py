@@ -21,12 +21,17 @@ LR = 0.015
 MOMENTUM = 0.95
 WEIGHT_DECAY = 1e-4
 
-# Same order as Network::parameters(): each Conv/Dense contributes weight, then bias.
+# Same order as Network::parameters(): Conv and Dense contribute weight then bias.
+# Each BatchNorm contributes gamma then beta. Running statistics are buffers.
 PARAMETER_NAMES = (
     "conv1.weight",
     "conv1.bias",
+    "bn1.weight",
+    "bn1.bias",
     "conv2.weight",
     "conv2.bias",
+    "bn2.weight",
+    "bn2.bias",
     "fc1.weight",
     "fc1.bias",
     "fc2.weight",
@@ -34,9 +39,11 @@ PARAMETER_NAMES = (
 )
 LAYER_NAMES = (
     "conv1",
+    "bn1",
     "relu1",
     "pool1",
     "conv2",
+    "bn2",
     "relu2",
     "pool2",
     "flatten",
@@ -52,7 +59,9 @@ class CNN(nn.Module):
     def __init__(self, num_classes=43):
         super().__init__()
         self.conv1 = nn.Conv2d(3, 16, kernel_size=3, stride=1, padding=1)
+        self.bn1 = nn.BatchNorm2d(16, eps=1e-5, momentum=0.1)
         self.conv2 = nn.Conv2d(16, 32, kernel_size=3, stride=1, padding=1)
+        self.bn2 = nn.BatchNorm2d(32, eps=1e-5, momentum=0.1)
         self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
         self.dropout = nn.Dropout(0.3)
         self.fc1 = nn.Linear(32 * 8 * 8, 128)
@@ -63,12 +72,16 @@ class CNN(nn.Module):
         layers = []
         x = self.conv1(x)
         layers.append(x)
+        x = self.bn1(x)
+        layers.append(x)
         x = F.relu(x)
         layers.append(x)
         x = self.pool(x)
         layers.append(x)
 
         x = self.conv2(x)
+        layers.append(x)
+        x = self.bn2(x)
         layers.append(x)
         x = F.relu(x)
         layers.append(x)
@@ -141,45 +154,73 @@ def _torch_dense_to_cpp(weight):
     return _as_numpy(weight.T)
 
 
+def _cpp_to_torch_parameter(name, array):
+    if name.startswith("conv") and name.endswith(".weight"):
+        return _conv_cpp_to_torch(array)
+    if name.startswith("fc") and name.endswith(".weight"):
+        return _dense_cpp_to_torch(array)
+    return torch.from_numpy(array.copy())
+
+
+def _torch_to_cpp_array(name, tensor):
+    if name.startswith("conv") and name.endswith(".weight"):
+        return _torch_conv_to_cpp(tensor)
+    if name.startswith("fc") and name.endswith(".weight"):
+        return _torch_dense_to_cpp(tensor)
+    return _as_numpy(tensor)
+
+
+def _cpp_batch_norms(cpp_net):
+    import cpp
+
+    layers = []
+    for index in range(cpp_net.numLayers()):
+        layer = cpp_net.getLayer(index)
+        if isinstance(layer, cpp.BatchNorm2D):
+            layers.append(layer)
+    return layers
+
+
+def _copy_buffers_from_cpp(model, cpp_net):
+    layers = _cpp_batch_norms(cpp_net)
+    modules = (model.bn1, model.bn2)
+    if len(layers) != len(modules):
+        raise RuntimeError(f"expected {len(modules)} BatchNorm layers, found {len(layers)}")
+    with torch.no_grad():
+        for module, layer in zip(modules, layers):
+            module.running_mean.copy_(torch.from_numpy(layer.runningMean().to_numpy().copy()))
+            module.running_var.copy_(torch.from_numpy(layer.runningVar().to_numpy().copy()))
+
+
+def _copy_buffers_to_cpp(model, cpp_net):
+    layers = _cpp_batch_norms(cpp_net)
+    modules = (model.bn1, model.bn2)
+    for module, layer in zip(modules, layers):
+        layer.runningMean().raw()[:] = _as_numpy(module.running_mean)
+        layer.runningVar().raw()[:] = _as_numpy(module.running_var)
+
+
 def copy_weights_from_cpp(model, cpp_net):
-    """Load the eight C++ parameter tensors into the matching PyTorch parameters."""
+    """Load C++ parameters and BatchNorm running statistics into the PyTorch twin."""
     params = cpp_net.parameters()
     if len(params) != len(PARAMETER_NAMES):
         raise RuntimeError(f"expected {len(PARAMETER_NAMES)} C++ parameters, found {len(params)}")
 
-    numpy = [params[i].to_numpy().astype(np.float32, copy=True) for i in range(len(params))]
-    mapping = {
-        "conv1.weight": _conv_cpp_to_torch(numpy[0]),
-        "conv1.bias": torch.from_numpy(numpy[1].copy()),
-        "conv2.weight": _conv_cpp_to_torch(numpy[2]),
-        "conv2.bias": torch.from_numpy(numpy[3].copy()),
-        "fc1.weight": _dense_cpp_to_torch(numpy[4]),
-        "fc1.bias": torch.from_numpy(numpy[5].copy()),
-        "fc2.weight": _dense_cpp_to_torch(numpy[6]),
-        "fc2.bias": torch.from_numpy(numpy[7].copy()),
-    }
+    named = dict(model.named_parameters())
     with torch.no_grad():
-        for name, value in mapping.items():
-            parameter = dict(model.named_parameters())[name]
-            parameter.copy_(value)
+        for name, param in zip(PARAMETER_NAMES, params):
+            array = param.to_numpy().astype(np.float32, copy=True)
+            named[name].copy_(_cpp_to_torch_parameter(name, array))
+    _copy_buffers_from_cpp(model, cpp_net)
 
 
 def copy_weights_to_cpp(model, cpp_net):
-    """Write PyTorch parameters back into the C++ network, in parameters() order."""
+    """Write PyTorch parameters and BatchNorm buffers back into the C++ network."""
     params = cpp_net.parameters()
     named = dict(model.named_parameters())
-    arrays = [
-        _torch_conv_to_cpp(named["conv1.weight"]),
-        _as_numpy(named["conv1.bias"]),
-        _torch_conv_to_cpp(named["conv2.weight"]),
-        _as_numpy(named["conv2.bias"]),
-        _torch_dense_to_cpp(named["fc1.weight"]),
-        _as_numpy(named["fc1.bias"]),
-        _torch_dense_to_cpp(named["fc2.weight"]),
-        _as_numpy(named["fc2.bias"]),
-    ]
-    for tensor, array in zip(params, arrays):
-        tensor.raw()[:] = array.reshape(-1)
+    for name, tensor in zip(PARAMETER_NAMES, params):
+        tensor.raw()[:] = _torch_to_cpp_array(name, named[name]).reshape(-1)
+    _copy_buffers_to_cpp(model, cpp_net)
 
 
 def _cpp_activations(cpp_net, x_np, numpy_to_tensor, tensor_to_numpy):
@@ -198,7 +239,8 @@ def _max_abs(a, b):
 def compare(batch_size=4, num_classes=43, atol=1e-4, seed=0):
     """Copy one C++ initialization into PyTorch and report max |Δ| for forward and backward.
 
-    Dropout is in eval mode on both sides, so the masks do not enter the comparison.
+    Dropout and BatchNorm are in eval mode on both sides, so masks and batch
+    statistics do not enter the comparison. Running statistics are copied with the weights.
     Returns a list of (name, max_abs_error) and raises if any error exceeds atol.
     """
     from model import create_network as create_cpp_network
@@ -207,10 +249,12 @@ def compare(batch_size=4, num_classes=43, atol=1e-4, seed=0):
     seed_everything(seed)
     torch.manual_seed(seed)
 
-    cpp_net, cpp_loss, _, cpp_dropout = create_cpp_network()
+    cpp_net, cpp_loss, _, cpp_dropout, cpp_batch_norms = create_cpp_network()
     model, loss, _, _ = create_network(num_classes)
     model.eval()
     cpp_dropout.setTraining(False)
+    for layer in cpp_batch_norms:
+        layer.setTraining(False)
     copy_weights_from_cpp(model, cpp_net)
 
     rng = np.random.default_rng(seed)
@@ -235,16 +279,7 @@ def compare(batch_size=4, num_classes=43, atol=1e-4, seed=0):
 
     cpp_grads = [tensor_to_numpy(grad) for grad in cpp_net.gradients()]
     named = dict(model.named_parameters())
-    torch_grads = [
-        _torch_conv_to_cpp(named["conv1.weight"].grad),
-        _as_numpy(named["conv1.bias"].grad),
-        _torch_conv_to_cpp(named["conv2.weight"].grad),
-        _as_numpy(named["conv2.bias"].grad),
-        _torch_dense_to_cpp(named["fc1.weight"].grad),
-        _as_numpy(named["fc1.bias"].grad),
-        _torch_dense_to_cpp(named["fc2.weight"].grad),
-        _as_numpy(named["fc2.bias"].grad),
-    ]
+    torch_grads = [_torch_to_cpp_array(name, named[name].grad) for name in PARAMETER_NAMES]
     for name, cpp_grad, torch_grad in zip(PARAMETER_NAMES, cpp_grads, torch_grads):
         rows.append((f"grad {name}", _max_abs(cpp_grad, torch_grad)))
 
