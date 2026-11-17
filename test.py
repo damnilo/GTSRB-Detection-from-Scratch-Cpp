@@ -12,7 +12,16 @@ import numpy as np
 import pandas as pd
 
 from load_dataset import IMG_HEIGHT, IMG_WIDTH
-from model import SEED, create_network, evaluate, load_norm_stats, seed_everything, standardize
+from model import (
+    SEED,
+    create_network,
+    evaluate,
+    load_batch_norm,
+    load_norm_stats,
+    seed_everything,
+    set_training,
+    standardize,
+)
 
 import cpp
 
@@ -51,9 +60,10 @@ def load_test_data():
 def main():
     """Load best_model.bin and print official-test accuracy under training-set normalization."""
     seed_everything(SEED)
-    net, _, _, dropout = create_network()
+    net, _, _, dropout, batch_norms = create_network()
     cpp.Serialization.loadNetwork(net, "best_model.bin")
-    dropout.setTraining(False)
+    load_batch_norm(batch_norms)
+    set_training(dropout, batch_norms, False)
 
     X_test, y_test = load_test_data()
     mean, std = load_norm_stats()
