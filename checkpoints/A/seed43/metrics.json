@@ -1,0 +1,10 @@
+{
+  "accuracy": 0.9495645288994458,
+  "macro_f1": 0.9278879238354604,
+  "class_27_recall": 0.55,
+  "confusions_7_to_8": 23,
+  "variant": "A",
+  "seed": 43,
+  "use_aug": false,
+  "use_bn": false
+}
