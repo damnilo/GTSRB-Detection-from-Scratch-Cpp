@@ -14,9 +14,11 @@
 #include "Layers/include/Network.h"
 #include "Layers/include/MaxPool2D.h"
 #include "Layers/include/Dropout.h"
+#include "Layers/include/BatchNorm2D.h"
 #include "Loss/include/CrossEntropy.h"
 #include "Loss/include/Loss.h"
 #include "Optimizers/include/SGD.h"
+#include "Optimizers/include/AdamW.h"
 
 namespace py = pybind11;
 
@@ -145,6 +147,17 @@ PYBIND11_MODULE(cpp, m) {
         .def("setLearningRate", &SGD::setLearningRate)
         .def("getLearningRate", &SGD::getLearningRate);
 
+    py::class_<AdamW>(m, "AdamW")
+        .def(py::init<float, float, float, float, float>(),
+             py::arg("learningRate") = 1e-3f,
+             py::arg("weightDecay") = 1e-2f,
+             py::arg("beta1") = 0.9f,
+             py::arg("beta2") = 0.999f,
+             py::arg("epsilon") = 1e-8f)
+        .def("update", &AdamW::update)
+        .def("setLearningRate", &AdamW::setLearningRate)
+        .def("getLearningRate", &AdamW::getLearningRate);
+
     py::class_<Serialization>(m, "Serialization")
         .def_static("saveNetwork", &Serialization::saveNetwork)
         .def_static("loadNetwork", &Serialization::loadNetwork);
@@ -160,4 +173,15 @@ PYBIND11_MODULE(cpp, m) {
         .def("backward", &Dropout::backward)
         .def("setTraining", &Dropout::setTraining)   // Call with False before evaluation/inference
         .def("isTraining", &Dropout::isTraining);
+
+    py::classh<BatchNorm2D, Layer>(m, "BatchNorm2D")
+        .def(py::init<size_t>())
+        .def("forward", &BatchNorm2D::forward)
+        .def("backward", &BatchNorm2D::backward)
+        .def("parameters", &BatchNorm2D::parameters, py::return_value_policy::reference)
+        .def("gradients", &BatchNorm2D::gradients, py::return_value_policy::reference)
+        .def("setTraining", &BatchNorm2D::setTraining)
+        .def("isTraining", &BatchNorm2D::isTraining)
+        .def("runningMean", &BatchNorm2D::runningMeanBuffer, py::return_value_policy::reference)
+        .def("runningVar", &BatchNorm2D::runningVarBuffer, py::return_value_policy::reference);
 }
