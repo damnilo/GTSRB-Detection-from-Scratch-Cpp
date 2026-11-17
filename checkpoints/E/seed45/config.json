@@ -1,0 +1,15 @@
+{
+  "architecture": "Conv 3->16 k3 s1 p1, BatchNorm, ReLU, MaxPool 2; Conv 16->32 k3 s1 p1, BatchNorm, ReLU, MaxPool 2; Flatten; Dense 2048->128; ReLU; Dropout 0.3; Dense 128->43; SoftMax",
+  "optimizer": "adamw",
+  "lr": 0.001,
+  "momentum": 0.95,
+  "weight_decay": 0.01,
+  "epochs": 10,
+  "batch_size": 64,
+  "seed": 45,
+  "use_aug": true,
+  "use_bn": true,
+  "clip_value": 5.0,
+  "image_size": 32,
+  "num_classes": 43
+}
