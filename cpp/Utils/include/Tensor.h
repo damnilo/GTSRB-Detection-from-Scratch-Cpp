@@ -62,13 +62,16 @@ public:
     // 2D matrix multiplication: (M,K) x (K,N) -> (M,N). Both operands must be 2D.
     Tensor matmul(const Tensor& other) const;
 
+    // (K,M)^T x (K,N) -> (M,N). The left matrix is read transposed, so the
+    // caller does not allocate that transpose.
+    Tensor matmulTransposedLeft(const Tensor& other) const;
+
     // 2D transpose: (M,N) -> (N,M).
     Tensor transpose() const;
 
     // Reduces a tensor along one axis by summation, removing that axis from the result shape.
     // Used for bias-gradient accumulation (summing gradients across the batch axis).
     Tensor sum(size_t axis) const;
-
     // Adds a 1D row vector to every row of a 2D tensor (shape (N, C) + shape (C,) -> (N, C)).
     // This is the only broadcasting operation in the library; used to add Dense/Conv biases.
     Tensor broadcastAdd(const Tensor& rowVector) const;

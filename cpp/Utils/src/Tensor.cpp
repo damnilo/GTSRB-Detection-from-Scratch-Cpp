@@ -1,5 +1,9 @@
 #include "Utils/include/Tensor.h"
+#include "Utils/include/Kernel.h"
 
+#include <cblas.h>
+
+#include <limits>
 #include <random>
 #include <numeric>
 #include <algorithm>
@@ -189,11 +193,8 @@ Tensor Tensor::operator+(float scalar) const {
     return result;
 }
 
-// Standard 2D matrix multiply: (M,K) x (K,N) -> (M,N), parallelized over the M (row) axis.
-// Loop order is i-j-k (row, then K/inner-dim, then N/output-col) so that for each fixed
-// (i,j) the scalar `a` is held constant while accumulating across the full output row —
-// this is the correct convention; an earlier bug used `j` as both the K-loop and the
-// accumulation index, which silently corrupted every Dense/Conv2D forward and backward pass.
+// (M,K) x (K,N) -> (M,N), row-major. Large narrow products use the tiled
+// kernel. Short products and wide ones use OpenBLAS. beta = 0 overwrites C.
 Tensor Tensor::matmul(const Tensor& other) const {
     if(shape.size() != 2 || other.shape.size() != 2){
         throw std::invalid_argument("Both tensors must be 2D for matrix multiplication");
@@ -205,23 +206,56 @@ Tensor Tensor::matmul(const Tensor& other) const {
     size_t M = shape[0];
     size_t K = shape[1];
     size_t N = other.shape[1];
+    const size_t intMax = static_cast<size_t>(std::numeric_limits<blasint>::max());
+    if(M > intMax || N > intMax || K > intMax){
+        throw std::invalid_argument("Matrix dimension does not fit in a BLAS integer");
+    }
 
     Tensor result({M, N});
 
-    const float* A = data.data();
-    const float* B = other.data.data();
-    float* C = result.data.data();
-
-    #pragma omp parallel for
-    for(size_t i = 0; i < M; ++i){
-        for(size_t j = 0; j < K; ++j){
-            float a = A[i*K + j];
-            for(size_t k = 0; k < N; ++k){
-                C[i*N + k] += a * B[j*N + k];
-            }
-        }
+    // The tiled kernel only pays off when it has enough 16x16 tiles to occupy
+    // the cores. A short-and-wide product, such as a conv weight gradient
+    // (M = 16, K = 65536, N = 27), makes two tiles, so it stays on OpenBLAS.
+    constexpr size_t tile = 16;
+    const size_t tileRows = (M + tile - 1) / tile;
+    const size_t tileCols = (N + tile - 1) / tile;
+    if (N < 64 && tileRows * tileCols >= 32) {
+        tiledGemm(data.data(), other.data.data(), result.data.data(), M, N, K);
+    } else {
+        cblas_sgemm(
+            CblasRowMajor, CblasNoTrans, CblasNoTrans,
+            static_cast<blasint>(M), static_cast<blasint>(N), static_cast<blasint>(K),
+            1.0f, data.data(), static_cast<blasint>(K),
+            other.data.data(), static_cast<blasint>(N),
+            0.0f, result.data.data(), static_cast<blasint>(N));
     }
 
+    return result;
+}
+
+Tensor Tensor::matmulTransposedLeft(const Tensor& other) const {
+    if(shape.size() != 2 || other.shape.size() != 2){
+        throw std::invalid_argument("Both tensors must be 2D for matrix multiplication");
+    }
+    if(shape[0] != other.shape[0]){
+        throw std::invalid_argument("Inner dimensions must match for matrix multiplication");
+    }
+
+    size_t K = shape[0];
+    size_t M = shape[1];
+    size_t N = other.shape[1];
+    const size_t intMax = static_cast<size_t>(std::numeric_limits<blasint>::max());
+    if(M > intMax || N > intMax || K > intMax){
+        throw std::invalid_argument("Matrix dimension does not fit in a BLAS integer");
+    }
+
+    Tensor result({M, N});
+    cblas_sgemm(
+        CblasRowMajor, CblasTrans, CblasNoTrans,
+        static_cast<blasint>(M), static_cast<blasint>(N), static_cast<blasint>(K),
+        1.0f, data.data(), static_cast<blasint>(M),
+        other.data.data(), static_cast<blasint>(N),
+        0.0f, result.data.data(), static_cast<blasint>(N));
     return result;
 }
 
