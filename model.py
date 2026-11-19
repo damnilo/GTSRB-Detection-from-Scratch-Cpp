@@ -172,6 +172,43 @@ def tensor_to_numpy(tensor):
     return tensor.to_numpy().astype(np.float32)
 
 
+def build_layers(use_bn=True):
+    """Two conv blocks, Flatten, Dense, Dropout, and SoftMax.
+
+    The returned objects are the same layers later added to the network, so a
+    caller can run them one by one and read the last convolution's maps.
+    BatchNorm sits after each convolution when use_bn is set.
+    """
+    layers = []
+    batch_norms = []
+
+    layers.append(cpp.Conv2D(3, 16, 3, 1, 1))
+    if use_bn:
+        batch_norm1 = cpp.BatchNorm2D(16)
+        layers.append(batch_norm1)
+        batch_norms.append(batch_norm1)
+    layers.append(cpp.ReLU())
+    layers.append(cpp.MaxPool2D(2, 2))
+
+    layers.append(cpp.Conv2D(16, 32, 3, 1, 1))
+    if use_bn:
+        batch_norm2 = cpp.BatchNorm2D(32)
+        layers.append(batch_norm2)
+        batch_norms.append(batch_norm2)
+    layers.append(cpp.ReLU())
+    layers.append(cpp.MaxPool2D(2, 2))
+
+    layers.append(cpp.Flatten())
+    layers.append(cpp.Dense(32 * 8 * 8, 128))
+    layers.append(cpp.ReLU())
+
+    dropout_layer = cpp.Dropout(0.3)
+    layers.append(dropout_layer)
+    layers.append(cpp.Dense(128, NUM_CATEGORIES))
+    layers.append(cpp.SoftMax())
+    return layers, dropout_layer, batch_norms
+
+
 def create_network(use_bn=True, optimizer_name="sgd"):
     """
     Builds the model: two conv blocks, a Flatten, Dense, Dropout, and SoftMax.
@@ -180,34 +217,10 @@ def create_network(use_bn=True, optimizer_name="sgd"):
     and any batch-norm layers are returned so the training loop can switch them
     between train and eval mode.
     """
+    layers, dropout_layer, batch_norms = build_layers(use_bn)
     net = cpp.Network()
-    batch_norms = []
-
-    net.addLayer(cpp.Conv2D(3, 16, 3, 1, 1))
-    if use_bn:
-        batch_norm1 = cpp.BatchNorm2D(16)
-        net.addLayer(batch_norm1)
-        batch_norms.append(batch_norm1)
-    net.addLayer(cpp.ReLU())
-    net.addLayer(cpp.MaxPool2D(2, 2))
-
-    net.addLayer(cpp.Conv2D(16, 32, 3, 1, 1))
-    if use_bn:
-        batch_norm2 = cpp.BatchNorm2D(32)
-        net.addLayer(batch_norm2)
-        batch_norms.append(batch_norm2)
-    net.addLayer(cpp.ReLU())
-    net.addLayer(cpp.MaxPool2D(2, 2))
-
-    net.addLayer(cpp.Flatten())
-    net.addLayer(cpp.Dense(32 * 8 * 8, 128))
-    net.addLayer(cpp.ReLU())
-
-    dropout_layer = cpp.Dropout(0.3)
-    net.addLayer(dropout_layer)
-
-    net.addLayer(cpp.Dense(128, NUM_CATEGORIES))
-    net.addLayer(cpp.SoftMax())
+    for layer in layers:
+        net.addLayer(layer)
 
     loss = cpp.CrossEntropy()
     if optimizer_name == "adamw":
