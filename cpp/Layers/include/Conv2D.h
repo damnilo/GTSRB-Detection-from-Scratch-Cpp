@@ -26,6 +26,7 @@ private:
     size_t outHCache;
     size_t outWCache;
 
+public:
     // Unrolls each (kernel_size x kernel_size) receptive field across all channels into
     // one row. Output shape: (N*outH*outW, in_channels*kernel_size*kernel_size).
     static Tensor im2col(const Tensor& input, size_t kernel_size, size_t stride, size_t padding);
@@ -34,7 +35,6 @@ private:
     // original (N,C,H,W) spatial layout (overlapping receptive fields sum their gradients).
     static Tensor col2im(const Tensor& col, const std::vector<size_t>& input, size_t kernel_size, size_t stride, size_t padding);
 
-public:
     Conv2D(size_t in_channels, size_t out_channels, size_t kernel_size, size_t stride = 1, size_t padding = 0);
 
     Tensor forward(const Tensor& input) override;
