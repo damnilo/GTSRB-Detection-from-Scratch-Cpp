@@ -83,12 +83,21 @@ float max_abs(
 }
 
 bool report(
-    const std::string& name, 
-    const char* stage, 
-    float diff
+    const std::string& name,
+    const char* stage,
+    const std::vector<float>& got,
+    const std::vector<float>& expected
 ) {
-    std::cout << name << " " << stage << " max abs " << diff << "\n";
-    return diff < kTolerance;
+    const float diff = max_abs(got, expected);
+    float scale = 0.0f;
+    for (float value : expected) {
+        scale = std::max(scale, std::fabs(value));
+    }
+    // A product of length 65536 is tens of units wide. 1e-4 absolute is tighter
+    // than float32 rounding along that sum, so the allowance scales with it.
+    const float limit = kTolerance * std::max(1.0f, scale);
+    std::cout << name << " " << stage << " max abs " << diff << " limit " << limit << "\n";
+    return diff < limit;
 }
 
 void launch_im2col(
@@ -298,6 +307,7 @@ bool check_case(const ConvCase& spec, cublasHandle_t handle, std::vector<BenchRo
     DeviceBuffer d_dout(d_out_col.size());
     DeviceBuffer d_dout_t(d_out_col.size());
     DeviceBuffer d_grad_w(cpu_grad_w.size());
+    DeviceBuffer d_cublas_grad(cpu_grad_w.size());
     DeviceBuffer d_d_col(cpu_d_col.size());
     DeviceBuffer d_grad_x(cpu_grad_x.size());
 
@@ -324,16 +334,16 @@ bool check_case(const ConvCase& spec, cublasHandle_t handle, std::vector<BenchRo
     );
 
     bool ok = true;
-    ok = report(spec.name, "im2col", max_abs(d_col.copy_to_host(), cpu_col.raw())) && ok;
-    ok = report(spec.name, "transpose", max_abs(d_weights_t.copy_to_host(), weights.transpose().raw())) && ok;
+    ok = report(spec.name, "im2col", d_col.copy_to_host(), cpu_col.raw()) && ok;
+    ok = report(spec.name, "transpose", d_weights_t.copy_to_host(), weights.transpose().raw()) && ok;
     const std::vector<float> tiled_host = d_out.copy_to_host();
-    ok = report(spec.name, "gemm", max_abs(tiled_host, cpu_out.raw())) && ok;
+    ok = report(spec.name, "gemm", tiled_host, cpu_out.raw()) && ok;
 
     launch_cublas(handle, d_col.get(), d_weights_t.get(), d_cublas.get(), spatial, spec.out_channels, row_size);
     must(cudaDeviceSynchronize(), "cublas sync");
     const std::vector<float> cublas_host = d_cublas.copy_to_host();
-    ok = report(spec.name, "cublas", max_abs(cublas_host, cpu_out.raw())) && ok;
-    ok = report(spec.name, "gemm vs cublas", max_abs(tiled_host, cublas_host)) && ok;
+    ok = report(spec.name, "cublas", cublas_host, cpu_out.raw()) && ok;
+    ok = report(spec.name, "gemm vs cublas", tiled_host, cublas_host) && ok;
 
     launch_transpose(d_dout.get(), d_dout_t.get(), spatial, spec.out_channels);
     
@@ -347,8 +357,20 @@ bool check_case(const ConvCase& spec, cublasHandle_t handle, std::vector<BenchRo
     );
     
     must(cudaDeviceSynchronize(), "gradW sync");
-    
-    ok = report(spec.name, "gradW", max_abs(d_grad_w.copy_to_host(), cpu_grad_w.raw())) && ok;
+    const std::vector<float> grad_w_host = d_grad_w.copy_to_host();
+    ok = report(spec.name, "gradW", grad_w_host, cpu_grad_w.raw()) && ok;
+
+    launch_cublas(
+        handle,
+        d_dout_t.get(),
+        d_col.get(),
+        d_cublas_grad.get(),
+        spec.out_channels,
+        row_size,
+        spatial
+    );
+    must(cudaDeviceSynchronize(), "cublas gradW sync");
+    ok = report(spec.name, "gradW vs cublas", grad_w_host, d_cublas_grad.copy_to_host()) && ok;
 
     launch_gemm(
         d_dout.get(), 
@@ -374,7 +396,7 @@ bool check_case(const ConvCase& spec, cublasHandle_t handle, std::vector<BenchRo
 
     must(cudaDeviceSynchronize(), "col2im sync");
     
-    ok = report(spec.name, "col2im", max_abs(d_grad_x.copy_to_host(), cpu_grad_x.raw())) && ok;
+    ok = report(spec.name, "col2im", d_grad_x.copy_to_host(), cpu_grad_x.raw()) && ok;
 
     forward_kernels(
         d_input.get(), 
@@ -529,7 +551,7 @@ int main(int argc, char** argv) {
     cublasDestroy(handle);
 
     if (!ok) {
-        std::cerr << "CUDA conv disagrees with the CPU path by 1e-4 or more\n";
+        std::cerr << "CUDA conv disagrees with the CPU path by more than 1e-4 of the result size\n";
         return 1;
     }
 
