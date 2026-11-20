@@ -89,6 +89,7 @@ if(CMAKE_CUDA_COMPILER)
         cuda/src/Convolution.cu
         cuda/src/ReLU.cu
         cuda/src/MaxPool2D.cu
+        cuda/src/SGD.cu
         cpp/Utils/src/Tensor.cpp
         cpp/Utils/src/Kernel.cpp
         cpp/Layers/src/Conv2D.cpp
@@ -97,6 +98,9 @@ if(CMAKE_CUDA_COMPILER)
         cpp/Layers/src/Flatten.cpp
         cpp/Layers/src/Dense.cpp
         cpp/Layers/src/Dropout.cpp
+        cpp/Layers/src/SoftMax.cpp
+        cpp/Loss/src/CrossEntropy.cpp
+        cpp/Optimizers/src/SGD.cpp
     )
     set_source_files_properties(cpp_bench/bench_eval.cpp PROPERTIES LANGUAGE CUDA)
     target_include_directories(bench_eval PRIVATE
