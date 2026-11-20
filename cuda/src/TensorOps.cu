@@ -89,12 +89,51 @@ __global__ void cudaTranspose(
     size_t M,
     size_t N
 ) {
-
     int i = blockIdx.y * blockDim.y + threadIdx.y;
     int j = blockIdx.x * blockDim.x + threadIdx.x;
 
-    if (i >= M || j >= N) return;
+    if (i >= static_cast<int>(M) || j >= static_cast<int>(N)) return;
 
     B[j * M + i] = A[i * N + j];
+}
 
+__global__ void cudaAddBias(
+    float* A,
+    const float* B,
+    size_t M,
+    size_t N
+) {
+
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (i >= M * N) return;
+
+    int col = i % N;
+    A[i] += B[col];
+
+}
+
+__global__ void cudaSpatialToNCHW(
+    const float* spatial,
+    float* nchw,
+    size_t batch,
+    size_t channels,
+    size_t height,
+    size_t width
+) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int H = static_cast<int>(height);
+    int W = static_cast<int>(width);
+    int C = static_cast<int>(channels);
+    int total = static_cast<int>(batch) * C * H * W;
+
+    if (idx >= total) return;
+
+    int w = idx % W;
+    int h = (idx / W) % H;
+    int c = (idx / (W * H)) % C;
+    int b = idx / (W * H * C);
+    int row = (b * H + h) * W + w;
+
+    nchw[idx] = spatial[row * C + c];
 }
