@@ -39,3 +39,27 @@ pybind11_add_module(cpp
 # Headers are included as "Layers/include/...", "Utils/include/...", etc.
 target_include_directories(cpp PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/cpp ${OPENBLAS_INCLUDE_DIR})
 target_link_libraries(cpp PRIVATE OpenMP::OpenMP_CXX ${OPENBLAS_LIBRARY})
+
+# The conv bench launches the CUDA kernels. Skip it when nvcc is not installed
+# so the Python module still configures on a CPU-only machine.
+include(CheckLanguage)
+check_language(CUDA)
+if(CMAKE_CUDA_COMPILER)
+    enable_language(CUDA)
+    add_executable(bench_conv
+        cpp_bench/bench_conv.cpp
+        cuda/src/TensorOps.cu
+        cuda/src/Convolution.cu
+        cpp/Utils/src/Tensor.cpp
+        cpp/Utils/src/Kernel.cpp
+        cpp/Layers/src/Conv2D.cpp
+    )
+    set_source_files_properties(cpp_bench/bench_conv.cpp PROPERTIES LANGUAGE CUDA)
+    target_include_directories(bench_conv PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/cpp
+        ${OPENBLAS_INCLUDE_DIR}
+    )
+    find_package(CUDAToolkit REQUIRED)
+    target_link_libraries(bench_conv PRIVATE OpenMP::OpenMP_CXX ${OPENBLAS_LIBRARY} CUDA::cublas)
+endif()
