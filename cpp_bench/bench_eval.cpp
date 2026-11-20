@@ -6,7 +6,9 @@
 #include "Layers/include/ReLU.h"
 #include "Layers/include/SoftMax.h"
 #include "Loss/include/CrossEntropy.h"
+#include "Optimizers/include/SGD.h"
 #include "cpp_bench/bench_cuda.h"
+#include "cuda/include/SGD.cuh"
 #include "cuda/include/MaxPool2D.cuh"
 #include "cuda/include/ReLU.cuh"
 
@@ -31,6 +33,9 @@ using cuda_bench::images_per_second;
 using cuda_bench::DeviceBuffer;
 
 constexpr size_t kBatch = 64;
+constexpr float kLearningRate = 0.015f;
+constexpr float kMomentum = 0.95f;
+constexpr float kDecay = 1e-4f;
 constexpr size_t kClasses = 43;
 constexpr size_t kHidden = 128;
 constexpr size_t kConv1Out = 16;
@@ -169,6 +174,19 @@ void launch_relu_backward(const float* grad, float* input_grad, int* mask, size_
     must(cudaGetLastError(), "cudaReLUBackward");
 }
 
+void launch_sgd(float* weight, const float* grad, float* velocity, size_t count) {
+    const unsigned block = 256;
+    const unsigned grid = static_cast<unsigned>((count + block - 1) / block);
+    cudaSGDStep<<<grid, block>>>(weight, grad, velocity, kLearningRate, kMomentum, kDecay, count);
+    must(cudaGetLastError(), "cudaSGDStep");
+}
+
+std::vector<float> copy_floats(const float* device, size_t count) {
+    std::vector<float> host(count);
+    must(cudaMemcpy(host.data(), device, count * sizeof(float), cudaMemcpyDeviceToHost), "cudaMemcpy DtoH");
+    return host;
+}
+
 void launch_pool_backward(const float* grad, float* input_grad, int* max_idx, size_t count) {
     const unsigned block = 256;
     const unsigned grid = static_cast<unsigned>((count + block - 1) / block);
@@ -191,7 +209,11 @@ bool backward_matches(
     const std::vector<Tensor*>& conv1_g,
     const std::vector<Tensor*>& conv2_g,
     const std::vector<Tensor*>& dense1_g,
-    const std::vector<Tensor*>& dense2_g
+    const std::vector<Tensor*>& dense2_g,
+    const std::vector<Tensor*>& conv1_p,
+    const std::vector<Tensor*>& conv2_p,
+    const std::vector<Tensor*>& dense1_p,
+    const std::vector<Tensor*>& dense2_p
 ) {
     DeviceBuffer<float> grad_logits(kLogitCount);
     DeviceBuffer<float> ha_t(kHiddenCount);
@@ -275,6 +297,56 @@ bool backward_matches(
     ok = report("eval", "dW1", d_w1.copy_to_host(), conv1_g[0]->raw()) && ok;
     ok = report("eval", "db1", d_b1.copy_to_host(), conv1_g[1]->raw()) && ok;
     ok = report("eval", "dX", d_x.copy_to_host(), grad_x.raw()) && ok;
+    if (!ok) {
+        return false;
+    }
+
+    // Velocity starts at zero, matching a freshly constructed SGD. The device
+    // weights are still the originals copied before this update.
+    const size_t w1_n = kConv1Out * kConv1K;
+    const size_t w2_n = kConv2Out * kConv2K;
+    const size_t w3_n = kFlatCount / kBatch * kHidden;
+    const size_t w4_n = kHidden * kClasses;
+    DeviceBuffer<float> v_w1(w1_n);
+    DeviceBuffer<float> v_b1(kConv1Out);
+    DeviceBuffer<float> v_w2(w2_n);
+    DeviceBuffer<float> v_b2(kConv2Out);
+    DeviceBuffer<float> v_w3(w3_n);
+    DeviceBuffer<float> v_b3(kHidden);
+    DeviceBuffer<float> v_w4(w4_n);
+    DeviceBuffer<float> v_b4(kClasses);
+    v_w1.zero(); v_b1.zero(); v_w2.zero(); v_b2.zero();
+    v_w3.zero(); v_b3.zero(); v_w4.zero(); v_b4.zero();
+
+    launch_sgd(w1, d_w1.get(), v_w1.get(), w1_n);
+    launch_sgd(g.b1, d_b1.get(), v_b1.get(), kConv1Out);
+    launch_sgd(w2, d_w2.get(), v_w2.get(), w2_n);
+    launch_sgd(g.b2, d_b2.get(), v_b2.get(), kConv2Out);
+    launch_sgd(w3, d_w3.get(), v_w3.get(), w3_n);
+    launch_sgd(g.b3, d_b3.get(), v_b3.get(), kHidden);
+    launch_sgd(w4, d_w4.get(), v_w4.get(), w4_n);
+    launch_sgd(g.b4, d_b4.get(), v_b4.get(), kClasses);
+    must(cudaDeviceSynchronize(), "sgd step");
+
+    std::vector<Tensor*> params = {
+        conv1_p[0], conv1_p[1], conv2_p[0], conv2_p[1],
+        dense1_p[0], dense1_p[1], dense2_p[0], dense2_p[1]
+    };
+    std::vector<Tensor*> grads = {
+        conv1_g[0], conv1_g[1], conv2_g[0], conv2_g[1],
+        dense1_g[0], dense1_g[1], dense2_g[0], dense2_g[1]
+    };
+    SGD optimizer(kLearningRate, kMomentum);
+    optimizer.update(params, grads);
+
+    ok = report("eval", "W1", copy_floats(w1, w1_n), conv1_p[0]->raw()) && ok;
+    ok = report("eval", "b1", copy_floats(g.b1, kConv1Out), conv1_p[1]->raw()) && ok;
+    ok = report("eval", "W2", copy_floats(w2, w2_n), conv2_p[0]->raw()) && ok;
+    ok = report("eval", "b2", copy_floats(g.b2, kConv2Out), conv2_p[1]->raw()) && ok;
+    ok = report("eval", "W3", copy_floats(w3, w3_n), dense1_p[0]->raw()) && ok;
+    ok = report("eval", "b3", copy_floats(g.b3, kHidden), dense1_p[1]->raw()) && ok;
+    ok = report("eval", "W4", copy_floats(w4, w4_n), dense2_p[0]->raw()) && ok;
+    ok = report("eval", "b4", copy_floats(g.b4, kClasses), dense2_p[1]->raw()) && ok;
     return ok;
 }
 
@@ -367,9 +439,9 @@ int main(int argc, char** argv) {
     CrossEntropy loss;
     const Tensor probabilities = softmax.forward(cpu_logits);
     loss.forward(probabilities, targets);
-    const Tensor d_logits = softmax.backward(loss.backward());
+    const Tensor grad_logits = softmax.backward(loss.backward());
 
-    const Tensor grad_ha = dense2.backward(d_logits);
+    const Tensor grad_ha = dense2.backward(grad_logits);
     const Tensor grad_h = relu3.backward(dropout.backward(grad_ha));
     const Tensor grad_flat = dense1.backward(grad_h);
     const Tensor grad_pool2 = flatten.backward(grad_flat);
@@ -475,9 +547,10 @@ int main(int argc, char** argv) {
 
     if (!backward_matches(
             gpu, d_w1.get(), d_w2.get(), d_w3.get(), d_w4.get(),
-            d_logits, grad_flat, grad_pool1, grad_x,
-            conv1_g, conv2_g, dense1_g, dense2_g)) {
-        std::cerr << "CUDA backward disagrees with the CPU stack by more than 1e-4 of the result size\n";
+            grad_logits, grad_flat, grad_pool1, grad_x,
+            conv1_g, conv2_g, dense1_g, dense2_g,
+            conv1_params, conv2_params, dense1_params, dense2_params)) {
+        std::cerr << "CUDA backward or the SGD step disagrees with the CPU stack by more than 1e-4 of the result size\n";
         return 1;
     }
 
@@ -485,6 +558,6 @@ int main(int argc, char** argv) {
     must(cudaGetDeviceProperties(&prop, 0), "cudaGetDeviceProperties");
     const std::string path = argc > 1 ? argv[1] : "results/bench_cuda.md";
     write_section(path, prop.name, resident_ms, transfer_ms);
-    std::cout << "CUDA eval matches the CPU logits and gradients within 1e-4\n";
+    std::cout << "CUDA eval matches the CPU logits, gradients, and one SGD step within 1e-4\n";
     return 0;
 }

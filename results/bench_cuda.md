@@ -14,3 +14,14 @@ Batch 64, kernel 3, stride 1, padding 1. Each row is the forward product of the 
 | (16384, 144) x (144, 32) | cuBLAS | 0.126 | 508001.031 |
 | (16384, 144) x (144, 32) | CPU matmul | 298.500 | 214.405 |
 | (16384, 144) x (144, 32) | tiled GEMM + copies | 2.879 | 22231.113 |
+
+## Model A eval
+
+GPU: Tesla T4.
+
+Model A, batch 64, no BatchNorm, dropout off. Logits are the last dense output, before SoftMax. They matched the CPU stack within 1e-4 of the result size. Median of 10 runs after one warmup. Resident keeps the batch and the weights on the device. Transfer sends the batch once, runs the same kernels, and reads the logits back once.
+
+| path | ms | img/s |
+| --- | ---: | ---: |
+| kernels on device | 2.796 | 22893.771 |
+| one batch copy | 3.028 | 21136.287 |
