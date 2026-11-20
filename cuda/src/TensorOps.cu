@@ -113,6 +113,24 @@ __global__ void cudaAddBias(
 
 }
 
+// One thread per column. Adds rows from top to bottom, matching Tensor::sum(0).
+__global__ void cudaSumRows(
+    const float* A,
+    float* B,
+    size_t M,
+    size_t N
+) {
+    int col = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (col >= static_cast<int>(N)) return;
+
+    float sum = 0.0f;
+    for (size_t row = 0; row < M; ++row) {
+        sum += A[row * N + col];
+    }
+    B[col] = sum;
+}
+
 __global__ void cudaSpatialToNCHW(
     const float* spatial,
     float* nchw,
@@ -121,19 +139,45 @@ __global__ void cudaSpatialToNCHW(
     size_t height,
     size_t width
 ) {
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
     int H = static_cast<int>(height);
     int W = static_cast<int>(width);
     int C = static_cast<int>(channels);
     int total = static_cast<int>(batch) * C * H * W;
 
-    if (idx >= total) return;
+    if (i >= total) return;
 
-    int w = idx % W;
-    int h = (idx / W) % H;
-    int c = (idx / (W * H)) % C;
-    int b = idx / (W * H * C);
+    int w = i % W;
+    int h = (i / W) % H;
+    int c = (i / (W * H)) % C;
+    int b = i / (W * H * C);
     int row = (b * H + h) * W + w;
 
-    nchw[idx] = spatial[row * C + c];
+    nchw[i] = spatial[row * C + c];
+}
+
+__global__ void cudaNCHWSpatial(
+    const float* nchw,
+    float* spatial, 
+    size_t batch,
+    size_t channels,
+    size_t height,
+    size_t width
+) {
+
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    int H = static_cast<int>(height);
+    int W = static_cast<int>(width);
+    int C = static_cast<int>(channels);
+    int total = static_cast<int>(batch) * C * H * W;
+
+    if (i >= total) return;
+    
+    int w = i % W;
+    int h = (i / W) % H;
+    int c = (i / (W * H)) % C;
+    int b = i / (W * H * C);
+    int row = (b * H + h) * W + w;
+
+    spatial[row * C + c] = nchw[i];
 }

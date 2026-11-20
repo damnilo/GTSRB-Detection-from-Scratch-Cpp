@@ -24,11 +24,27 @@ __global__ void cudaAddBias(
     size_t N
 );
 
+__global__ void cudaSumRows(
+    const float* A,
+    float* B,
+    size_t M,
+    size_t N
+);
+
 __global__ void cudaSpatialToNCHW(
     const float* spatial,
     float* nchw,
     size_t batch,
     size_t channels,
     size_t height,
+    size_t width
+);
+
+__global__ void cudaNCHWSpatial(
+    const float* nchw,
+    float* spatial,
+    size_t batch,
+    size_t channels,
+    size_t height, 
     size_t width
 );
