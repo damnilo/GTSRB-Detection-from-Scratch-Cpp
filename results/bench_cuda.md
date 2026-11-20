@@ -23,5 +23,5 @@ Model A, batch 64, no BatchNorm, dropout off. Logits are the last dense output, 
 
 | path | ms | img/s |
 | --- | ---: | ---: |
-| kernels on device | 2.796 | 22893.771 |
-| one batch copy | 3.028 | 21136.287 |
+| kernels on device | 3.104 | 20616.643 |
+| one batch copy | 3.336 | 19185.020 |
