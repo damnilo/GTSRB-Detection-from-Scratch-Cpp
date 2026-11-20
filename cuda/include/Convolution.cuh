@@ -1,4 +1,4 @@
-#include "TensorOps.cuh"
+#include <cuda_runtime.h>
 
 __global__ void cudaIm2Col(
     const float* A,
