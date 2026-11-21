@@ -69,3 +69,18 @@ Tensor MaxPool2D::backward(const Tensor& gradOutput) {
 
     return gradInput;
 }
+
+MaxPool2D::~MaxPool2D() { releaseDevice(); }
+
+#ifndef GTSRB_CUDA
+void MaxPool2D::releaseDevice() {}
+
+float* MaxPool2D::forwardDevice(const float* input, size_t batch, size_t channels, size_t height, size_t width) {
+    (void)input;
+    (void)batch;
+    (void)channels;
+    (void)height;
+    (void)width;
+    throw std::runtime_error("CUDA was not built");
+}
+#endif

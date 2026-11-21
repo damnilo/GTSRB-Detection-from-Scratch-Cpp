@@ -23,6 +23,14 @@ Tensor Flatten::forward(const Tensor& input) {
 
 // Reshapes the incoming flat gradient back to the original pre-flatten shape.
 // No data movement needed since the buffer layout is unchanged, just shape metadata.
+float* Flatten::forwardDevice(const float* input, size_t batch, size_t channels, size_t height, size_t width) {
+    (void)batch;
+    (void)channels;
+    (void)height;
+    (void)width;
+    return const_cast<float*>(input);
+}
+
 Tensor Flatten::backward(const Tensor& gradOutput) {
     Tensor gradInput = gradOutput;
     gradInput.reshape(inputShapeCache);

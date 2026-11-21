@@ -1,5 +1,20 @@
 #include "Layers/include/ReLU.h"
 
+ReLU::~ReLU() { releaseDevice(); }
+
+#ifndef GTSRB_CUDA
+void ReLU::releaseDevice() {}
+
+float* ReLU::forwardDevice(const float* input, size_t batch, size_t channels, size_t height, size_t width) {
+    (void)input;
+    (void)batch;
+    (void)channels;
+    (void)height;
+    (void)width;
+    throw std::runtime_error("CUDA was not built");
+}
+#endif
+
 // Stores a binary mask alongside the clamped output so backward() can route
 // gradients only through positions that were active during the forward pass.
 Tensor ReLU::forward(const Tensor& input) {

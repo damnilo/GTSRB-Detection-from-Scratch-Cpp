@@ -57,31 +57,16 @@ pybind11_add_module(cpp
 target_include_directories(cpp PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/cpp ${OPENBLAS_INCLUDE_DIR})
 target_link_libraries(cpp PRIVATE OpenMP::OpenMP_CXX ${OPENBLAS_LIBRARY})
 else()
-    message(STATUS "pybind11 was not found. The Python module is skipped. The CUDA benches do not need it.")
+    message(STATUS "pybind11 was not found. The Python module is skipped. The CUDA bench does not need it.")
 endif()
 
-# The CUDA benches launch the kernels. Skip them when nvcc is not installed
+# The CUDA bench launches the kernels. Skip it when nvcc is not installed
 # so the Python module still configures on a CPU-only machine.
 include(CheckLanguage)
 check_language(CUDA)
 if(CMAKE_CUDA_COMPILER)
     enable_language(CUDA)
-    add_executable(bench_conv
-        cpp_bench/bench_conv.cpp
-        cuda/src/TensorOps.cu
-        cuda/src/Convolution.cu
-        cpp/Utils/src/Tensor.cpp
-        cpp/Utils/src/Kernel.cpp
-        cpp/Layers/src/Conv2D.cpp
-    )
-    set_source_files_properties(cpp_bench/bench_conv.cpp PROPERTIES LANGUAGE CUDA)
-    target_include_directories(bench_conv PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}
-        ${CMAKE_CURRENT_SOURCE_DIR}/cpp
-        ${OPENBLAS_INCLUDE_DIR}
-    )
     find_package(CUDAToolkit REQUIRED)
-    target_link_libraries(bench_conv PRIVATE OpenMP::OpenMP_CXX ${OPENBLAS_LIBRARY} CUDA::cublas)
 
     add_executable(bench_eval
         cpp_bench/bench_eval.cpp
@@ -90,6 +75,10 @@ if(CMAKE_CUDA_COMPILER)
         cuda/src/ReLU.cu
         cuda/src/MaxPool2D.cu
         cuda/src/SGD.cu
+        cuda/src/Conv2D.cu
+        cuda/src/ReLUDevice.cu
+        cuda/src/MaxPoolDevice.cu
+        cuda/src/DenseDevice.cu
         cpp/Utils/src/Tensor.cpp
         cpp/Utils/src/Kernel.cpp
         cpp/Layers/src/Conv2D.cpp
@@ -103,10 +92,28 @@ if(CMAKE_CUDA_COMPILER)
         cpp/Optimizers/src/SGD.cpp
     )
     set_source_files_properties(cpp_bench/bench_eval.cpp PROPERTIES LANGUAGE CUDA)
+    target_compile_definitions(bench_eval PRIVATE GTSRB_CUDA)
     target_include_directories(bench_eval PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_CURRENT_SOURCE_DIR}/cpp
         ${OPENBLAS_INCLUDE_DIR}
     )
-    target_link_libraries(bench_eval PRIVATE OpenMP::OpenMP_CXX ${OPENBLAS_LIBRARY})
+    target_link_libraries(bench_eval PRIVATE OpenMP::OpenMP_CXX ${OPENBLAS_LIBRARY} CUDA::cublas)
+
+    # The Python module stays CPU-only unless this configure found nvcc.
+    if(TARGET cpp)
+        target_sources(cpp PRIVATE
+            cuda/src/TensorOps.cu
+            cuda/src/Convolution.cu
+            cuda/src/ReLU.cu
+            cuda/src/MaxPool2D.cu
+            cuda/src/Conv2D.cu
+            cuda/src/ReLUDevice.cu
+            cuda/src/MaxPoolDevice.cu
+            cuda/src/DenseDevice.cu
+        )
+        target_compile_definitions(cpp PRIVATE GTSRB_CUDA)
+        target_include_directories(cpp PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+        target_link_libraries(cpp PRIVATE CUDA::cudart)
+    endif()
 endif()

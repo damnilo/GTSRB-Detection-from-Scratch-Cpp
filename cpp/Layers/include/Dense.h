@@ -14,11 +14,16 @@ private:
     Tensor inputCache;  // Input from forward(), needed to compute gradWeights in backward()
     Tensor gradWeights;
     Tensor gradBiases;
+    void* device = nullptr;
 
 public:
+    ~Dense() override;
+    void releaseDevice();
     Dense(size_t inputSize, size_t outputSize);
 
     Tensor forward(const Tensor& input) override;
+    float* forwardDevice(const float* input, size_t batch, size_t channels, size_t height, size_t width) override;
+    
     Tensor backward(const Tensor& gradOutput) override;
 
     std::vector<Tensor*> parameters() override;

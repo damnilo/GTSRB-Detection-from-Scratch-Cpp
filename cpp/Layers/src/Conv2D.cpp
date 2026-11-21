@@ -113,6 +113,8 @@ Conv2D::Conv2D(size_t in_channels, size_t out_channels, size_t kernel_size, size
     biases.fill(0.0f);
 }
 
+Conv2D::~Conv2D() { releaseDevice(); }
+
 // Forward pass via im2col -> matmul -> reshape back to (N, out_channels, outH, outW).
 // Reframing convolution as one big matmul lets this reuse Tensor::matmul's
 // (parallelized) implementation instead of a naive nested-loop convolution.
@@ -189,3 +191,28 @@ std::vector<Tensor*> Conv2D::parameters() {
 std::vector<Tensor*> Conv2D::gradients() {
     return {&gradWeights, &gradBiases};
 }
+
+#ifndef GTSRB_CUDA
+
+void Conv2D::releaseDevice() {}
+
+float* Conv2D::forwardDevice(
+    const float* input,
+    size_t batch,
+    size_t channels,
+    size_t height,
+    size_t width
+) {
+    (void)input;
+    (void)batch;
+    (void)channels;
+    (void)height;
+    (void)width;
+    throw std::runtime_error("CUDA was not built");
+}
+
+float* Conv2D::deviceOutput() const {
+    return nullptr;
+}
+
+#endif

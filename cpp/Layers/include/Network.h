@@ -20,6 +20,8 @@ public:
     void addLayer(std::shared_ptr<Layer> layer);
 
     Tensor forward(const Tensor& input);          // Runs input through every layer in order
+    // Device activations stay on the card. Stops before SoftMax and returns logits.
+    float* forwardDevice(const float* input, size_t batch, size_t channels, size_t height, size_t width);
     Tensor backward(const Tensor& gradOutput);     // Runs gradient through every layer in reverse order
 
     std::vector<Tensor*> parameters();             // Collects parameter pointers from every layer, in order

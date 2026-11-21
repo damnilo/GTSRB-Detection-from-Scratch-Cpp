@@ -20,6 +20,8 @@ public:
     static void seed(unsigned int seed);
 
     Tensor forward(const Tensor& input) override;
+    float* forwardDevice(const float* input, size_t batch, size_t channels, size_t height, size_t width) override;
+    
     Tensor backward(const Tensor& gradOutput) override;
 
     void setTraining(bool isTraining); // Must be set to false before evaluation/inference

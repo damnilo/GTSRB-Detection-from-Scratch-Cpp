@@ -15,6 +15,8 @@ private:
     size_t stride;
     size_t padding;
 
+    void* device = nullptr;
+    
     Tensor weights;     // Shape (out_channels, in_channels * kernel_size * kernel_size)
     Tensor biases;      // Shape (out_channels,)
     Tensor inputCache;  // Raw input from forward(), needed for col2im in backward()
@@ -36,10 +38,16 @@ public:
     static Tensor col2im(const Tensor& col, const std::vector<size_t>& input, size_t kernel_size, size_t stride, size_t padding);
 
     Conv2D(size_t in_channels, size_t out_channels, size_t kernel_size, size_t stride = 1, size_t padding = 0);
+    ~Conv2D() override;
 
     Tensor forward(const Tensor& input) override;
+    float* forwardDevice(const float* input, size_t batch, size_t channels, size_t height, size_t width) override;
+
     Tensor backward(const Tensor& gradOutput) override;
 
     std::vector<Tensor*> parameters() override;
     std::vector<Tensor*> gradients() override;
+
+    void releaseDevice();
+    float* deviceOutput() const;
 };

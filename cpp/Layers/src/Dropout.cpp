@@ -54,6 +54,17 @@ Tensor Dropout::backward(const Tensor& gradOutput) {
     return gradInput;
 }
 
+float* Dropout::forwardDevice(const float* input, size_t batch, size_t channels, size_t height, size_t width) {
+    (void)batch;
+    (void)channels;
+    (void)height;
+    (void)width;
+    if (training) {
+        throw std::runtime_error("Device dropout is implemented for eval only");
+    }
+    return const_cast<float*>(input);
+}
+
 void Dropout::setTraining(bool isTraining) {
     training = isTraining;
 }
