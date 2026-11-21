@@ -7,6 +7,7 @@ training-set normalization. A second pass repeats the old test-set
 normalization so the leakage can be measured; that pass is not the headline result.
 """
 
+import argparse
 import csv
 import json
 from pathlib import Path
@@ -21,6 +22,7 @@ from model import (
     evaluate_with_confusion,
     load_batch_norm,
     load_norm_stats,
+    numpy_to_tensor,
     seed_everything,
     set_training,
     standardize,
@@ -118,7 +120,68 @@ def public_metrics(scores):
     return {key: value for key, value in scores.items() if key != "per_class"}
 
 
-def main():
+def cpu_logits(net, batch):
+    """Run the host stack and stop before SoftMax, matching forwardDevice."""
+    current = numpy_to_tensor(batch)
+    for index in range(net.numLayers()):
+        layer = net.getLayer(index)
+        if isinstance(layer, cpp.SoftMax):
+            break
+        current = layer.forward(current)
+    return current.to_numpy()
+
+
+def check_first_batch(net, images):
+    """One real batch must match the host logits before the full test runs."""
+    count = min(64, len(images))
+    batch = np.ascontiguousarray(images[:count], dtype=np.float32)
+    reference = cpu_logits(net, batch)
+    got, _ = cpp.forward_device(net, batch)
+    gap = float(np.max(np.abs(got - reference)))
+    limit = 1e-4 * max(1.0, float(np.max(np.abs(reference))))
+    if gap > limit:
+        raise SystemExit(f"CUDA logits differ from the CPU stack by {gap:.3e}, limit {limit:.3e}")
+
+
+def confusion_on_device(net, images, labels):
+    """Official test. The timer is upload, kernels, and the logit download."""
+    confusion = np.zeros((NUM_CATEGORIES, NUM_CATEGORIES), dtype=int)
+    total_ms = 0.0
+    for start in range(0, len(images), 64):
+        batch = np.ascontiguousarray(images[start:start + 64], dtype=np.float32)
+        logits, milliseconds = cpp.forward_device(net, batch)
+        total_ms += float(milliseconds)
+        predicted = np.argmax(logits, axis=1)
+        for truth, guess in zip(labels[start:start + 64], predicted):
+            confusion[int(truth), int(guess)] += 1
+    return confusion, total_ms
+
+
+def load_checkpoint(directory):
+    directory = Path(directory)
+    config = json.loads((directory / "config.json").read_text(encoding="utf-8"))
+    use_bn = bool(config["use_bn"])
+    net, _, _, dropout, batch_norms = create_network(use_bn=use_bn)
+    cpp.Serialization.loadNetwork(net, str(directory / "best_model.bin"))
+    if batch_norms:
+        load_batch_norm(batch_norms, directory / "bn.npz")
+    set_training(dropout, batch_norms, False)
+    mean, std = load_norm_stats(directory / "norm.npz")
+    return net, mean, std, use_bn
+
+
+def write_metrics(path, scores, extra):
+    metrics = public_metrics(scores)
+    metrics["protocol"] = "training-set per-channel mean/std"
+    metrics.update(extra)
+    path.write_text(json.dumps(metrics, indent=2) + "\n", encoding="utf-8")
+    accuracy = metrics["accuracy"] * 100
+    print(f"Train-stat accuracy: {accuracy:.4f}% ({metrics['correct_predictions']} / {metrics['test_images']})")
+    print(f"Macro F1: {metrics['macro_f1'] * 100:.4f}%")
+    return metrics
+
+
+def evaluate_default():
     seed_everything(SEED)
     net, _, _, dropout, batch_norms = create_network()
     cpp.Serialization.loadNetwork(net, "best_model.bin")
@@ -156,6 +219,53 @@ def main():
     print(f"Macro F1: {metrics['macro_f1'] * 100:.4f}%")
     print(f"Test-stat accuracy (old protocol): {leaky_accuracy:.4f}%")
     print(f"Wrote {RESULTS_DIR}")
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Official GTSRB evaluation.")
+    parser.add_argument("--checkpoint", type=Path, help="Directory with config.json, best_model.bin, and norm.npz.")
+    parser.add_argument("--device", choices=("cpu", "cuda"), default="cpu")
+    args = parser.parse_args()
+
+    if args.checkpoint is None:
+        if args.device == "cuda":
+            raise SystemExit("CUDA eval needs --checkpoint, and that checkpoint must not use BatchNorm.")
+        evaluate_default()
+        return
+
+    seed_everything(SEED)
+    net, mean, std, use_bn = load_checkpoint(args.checkpoint)
+    if args.device == "cuda":
+        if use_bn:
+            raise SystemExit("CUDA eval is model A only. This checkpoint uses BatchNorm.")
+        if not cpp.cuda_available():
+            raise SystemExit("This build has no CUDA. Configure with nvcc and rebuild the cpp module.")
+
+    images, labels = load_test_data()
+    images = standardize(images, mean, std)
+    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+
+    if args.device == "cpu":
+        confusion = evaluate_with_confusion(net, images, labels, NUM_CATEGORIES)
+        scores = scores_from_confusion(confusion)
+        path = RESULTS_DIR / "test_metrics_cpu.json"
+        write_metrics(path, scores, {"device": "cpu", "checkpoint": str(args.checkpoint)})
+        print(f"Wrote {path}")
+        return
+
+    check_first_batch(net, images)
+    confusion, total_ms = confusion_on_device(net, images, labels)
+    scores = scores_from_confusion(confusion)
+    images_per_second = scores["test_images"] / (total_ms / 1000.0)
+    path = RESULTS_DIR / "test_metrics_cuda.json"
+    write_metrics(path, scores, {
+        "device": "cuda",
+        "checkpoint": str(args.checkpoint),
+        "milliseconds": total_ms,
+        "images_per_second": images_per_second,
+    })
+    print(f"Device time: {total_ms:.3f} ms, {images_per_second:.3f} img/s")
+    print(f"Wrote {path}")
 
 
 if __name__ == "__main__":

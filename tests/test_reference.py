@@ -287,6 +287,120 @@ def compare(batch_size=4, num_classes=43, atol=1e-4, seed=0):
     return rows, failures
 
 
+def _grad_check(layer, values, eps=1e-3):
+    """Central difference of sum(forward) against backward, one parameter at a time."""
+    import cpp
+
+    x = cpp.Tensor(np.asarray(values, dtype=np.float32))
+    output = layer.forward(x)
+    ones = np.ones(output.to_numpy().shape, dtype=np.float32)
+    layer.backward(cpp.Tensor(ones))
+
+    worst = 0.0
+    for param, analytical in zip(layer.parameters(), layer.gradients()):
+        data = param.raw()
+        expected = analytical.to_numpy().reshape(-1)
+        for index in range(data.size):
+            original = float(data[index])
+            data[index] = original + eps
+            plus = float(layer.forward(x).to_numpy().sum())
+            data[index] = original - eps
+            minus = float(layer.forward(x).to_numpy().sum())
+            data[index] = original
+            numeric = (plus - minus) / (2.0 * eps)
+            scale = max(1.0, abs(float(expected[index])))
+            worst = max(worst, abs(numeric - float(expected[index])) / scale)
+    return worst
+
+
+def test_pytorch_reference_matches():
+    _, failures = compare()
+    assert not failures
+
+
+def test_conv_finite_difference():
+    import cpp
+
+    from model import seed_everything
+
+    seed_everything(1)
+    layer = cpp.Conv2D(2, 3, 3, 1, 1)
+    values = np.random.default_rng(1).standard_normal((2, 2, 5, 5)).astype(np.float32)
+    assert _grad_check(layer, values) < 1e-3
+
+
+def test_dense_finite_difference():
+    import cpp
+
+    from model import seed_everything
+
+    seed_everything(0)
+    layer = cpp.Dense(6, 4)
+    values = np.random.default_rng(0).standard_normal((3, 6)).astype(np.float32)
+    assert _grad_check(layer, values) < 1e-3
+
+
+def test_softmax_rows_sum_to_one():
+    import cpp
+
+    from model import seed_everything
+
+    seed_everything(0)
+    logits = np.array([[1.0, 2.0, 3.0], [0.0, 0.0, 0.0], [-5.0, 5.0, 0.0]], dtype=np.float32)
+    out = cpp.SoftMax().forward(cpp.Tensor(logits)).to_numpy()
+    np.testing.assert_allclose(out.sum(axis=1), np.ones(3), atol=1e-6)
+    assert np.all(out >= 0.0)
+
+
+def test_dropout_eval_is_identity():
+    import cpp
+
+    from model import seed_everything
+
+    seed_everything(0)
+    layer = cpp.Dropout(0.9)
+    layer.setTraining(False)
+    values = np.arange(12, dtype=np.float32).reshape(3, 4)
+    out = layer.forward(cpp.Tensor(values)).to_numpy()
+    np.testing.assert_array_equal(out, values)
+
+
+def test_serialization_roundtrip(tmp_path):
+    import cpp
+
+    from model import create_network, seed_everything
+
+    seed_everything(7)
+    net, _, _, _, _ = create_network(use_bn=False)
+    before = [param.to_numpy().copy() for param in net.parameters()]
+    path = tmp_path / "roundtrip.bin"
+    cpp.Serialization.saveNetwork(net, str(path))
+
+    seed_everything(99)
+    restored, _, _, _, _ = create_network(use_bn=False)
+    cpp.Serialization.loadNetwork(restored, str(path))
+    for left, param in zip(before, restored.parameters()):
+        np.testing.assert_array_equal(left, param.to_numpy())
+
+
+def test_group_split_keeps_a_track_on_one_side():
+    from load_dataset import stratified_group_split
+
+    tracks = np.array(["t0a", "t0a", "t0b", "t0b", "t1a", "t1a", "t1b", "t1b"])
+    labels = np.array([0, 0, 0, 0, 1, 1, 1, 1])
+    train_idx, val_idx = stratified_group_split(tracks, labels, test_size=0.5, random_state=42)
+    train_idx = np.asarray(train_idx)
+    val_idx = np.asarray(val_idx)
+
+    assert set(train_idx).isdisjoint(set(val_idx))
+    assert set(train_idx) | set(val_idx) == set(range(len(labels)))
+    for cls in np.unique(labels):
+        train_tracks = set(tracks[train_idx][labels[train_idx] == cls])
+        val_tracks = set(tracks[val_idx][labels[val_idx] == cls])
+        assert train_tracks.isdisjoint(val_tracks)
+        assert train_tracks and val_tracks
+
+
 def main():
     rows, failures = compare()
     for name, error in rows:

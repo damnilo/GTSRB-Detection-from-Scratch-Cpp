@@ -45,3 +45,18 @@ std::vector<Tensor*> Dense::parameters() {
 std::vector<Tensor*> Dense::gradients() {
     return {&gradWeights, &gradBiases};
 }
+
+Dense::~Dense() { releaseDevice(); }
+
+#ifndef GTSRB_CUDA
+void Dense::releaseDevice() {}
+
+float* Dense::forwardDevice(const float* input, size_t batch, size_t channels, size_t height, size_t width) {
+    (void)input;
+    (void)batch;
+    (void)channels;
+    (void)height;
+    (void)width;
+    throw std::runtime_error("CUDA was not built");
+}
+#endif

@@ -8,3 +8,5 @@ main.py
 best_model.bin
 dataset/
 IMPROVEMENT.md
+
+!checkpoints/A/seed42/best_model.bin

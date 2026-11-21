@@ -1,4 +1,7 @@
 #include "Layers/include/Network.h"
+#include "Layers/include/Flatten.h"
+#include "Layers/include/MaxPool2D.h"
+#include "Layers/include/SoftMax.h"
 
 void Network::addLayer(std::shared_ptr<Layer> layer) {
     layers.push_back(layer);
@@ -11,6 +14,27 @@ Tensor Network::forward(const Tensor& input) {
         output = layer->forward(output);
     }
     return output;
+}
+
+float* Network::forwardDevice(const float* input, size_t batch, size_t channels, size_t height, size_t width) {
+    const float* current = input;
+    size_t c = channels;
+    size_t h = height;
+    size_t w = width;
+    for (const auto& layer : layers) {
+        if (dynamic_cast<SoftMax*>(layer.get()) != nullptr) {
+            break;
+        }
+        current = layer->forwardDevice(current, batch, c, h, w);
+        if (auto* pool = dynamic_cast<MaxPool2D*>(layer.get())) {
+            pool->outputSize(h, w, h, w);
+        } else if (dynamic_cast<Flatten*>(layer.get()) != nullptr) {
+            c *= h * w;
+            h = 1;
+            w = 1;
+        }
+    }
+    return const_cast<float*>(current);
 }
 
 // Backward pass: walks layers in reverse, since gradients flow from the loss

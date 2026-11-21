@@ -10,8 +10,8 @@
 #include <string>
 #include <vector>
 
-// Shared by bench_conv and bench_eval. Each bench is its own executable, so
-// these inline definitions are not linked together.
+// Header-only helpers for bench_eval. The definitions stay inline because
+// this header is included from one translation unit.
 namespace cuda_bench {
 
 constexpr float kTolerance = 1e-4f;

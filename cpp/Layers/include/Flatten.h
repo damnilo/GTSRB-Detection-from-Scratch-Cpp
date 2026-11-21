@@ -10,5 +10,7 @@ private:
     std::vector<size_t> inputShapeCache; // Original shape, needed to reshape gradients back in backward()
 public:
     Tensor forward(const Tensor& input) override;
+    float* forwardDevice(const float* input, size_t batch, size_t channels, size_t height, size_t width) override;
+    
     Tensor backward(const Tensor& gradOutput) override;
 };

@@ -6,6 +6,7 @@ Set this before the C++ module loads: OpenMP reads OMP_NUM_THREADS at startup.
 """
 
 import os
+import platform
 
 THREADS = 4
 os.environ["OMP_NUM_THREADS"] = str(THREADS)
@@ -23,8 +24,8 @@ import torch
 
 from model import create_network as create_cpp_network
 from model import numpy_to_tensor
-from reference.pytorch_cnn import copy_weights_from_cpp
-from reference.pytorch_cnn import create_network as create_torch_network
+from tests.test_reference import copy_weights_from_cpp
+from tests.test_reference import create_network as create_torch_network
 import cpp
 
 BATCHES = [1, 16, 64]
@@ -73,7 +74,7 @@ def bench_pair(cpp_fn, torch_fn):
     return cpp_s * 1000.0, torch_s * 1000.0
 
 
-def bench():
+def bench(path):
     torch.set_num_threads(THREADS)
     torch.set_num_interop_threads(1)
     torch.set_grad_enabled(False)
@@ -102,6 +103,7 @@ def bench():
     print(f"threads={THREADS}  warmup={WARMUP}  repeats={REPEATS}  median")
     print(f"{'case':<12} {'batch':>5} {'cpp ms':>10} {'torch ms':>10} {'cpp img/s':>10} {'torch img/s':>12} {'cpp GFLOP/s':>12}")
 
+    rows = []
     for batch in BATCHES:
         full = layer_inputs(batch)["conv1"]
         cpp_x = numpy_to_tensor(full)
@@ -111,7 +113,7 @@ def bench():
             lambda: torch_net(torch_x),
         )
         flops = sum(gflops(name, batch, cpp_ms / 1000.0) for name in GEMM_PER_IMAGE)
-        _report("full", batch, cpp_ms, torch_ms, flops)
+        rows.append(_report("full", batch, cpp_ms, torch_ms, flops))
 
         inputs = layer_inputs(batch)
         for name in ("conv1", "conv2", "fc1", "fc2"):
@@ -124,16 +126,55 @@ def bench():
                 lambda layer=cpp_layer, tensor=cpp_in: layer.forward(tensor),
                 lambda layer=torch_layer, tensor=torch_in: layer(tensor),
             )
-            _report(name, batch, cpp_ms, torch_ms, gflops(name, batch, cpp_ms / 1000.0))
+            rows.append(_report(name, batch, cpp_ms, torch_ms, gflops(name, batch, cpp_ms / 1000.0)))
+
+    write_table(path, rows)
 
 
 def _report(name, batch, cpp_ms, torch_ms, cpp_gflops):
+    cpp_ips = batch / (cpp_ms / 1000.0)
+    torch_ips = batch / (torch_ms / 1000.0)
     print(
         f"{name:<12} {batch:5d} {cpp_ms:10.3f} {torch_ms:10.3f} "
-        f"{batch / (cpp_ms / 1000.0):10.1f} {batch / (torch_ms / 1000.0):12.1f} "
-        f"{cpp_gflops:12.2f}"
+        f"{cpp_ips:10.1f} {torch_ips:12.1f} {cpp_gflops:12.2f}"
     )
+    return {
+        "case": name,
+        "batch": batch,
+        "cpp_ms": cpp_ms,
+        "torch_ms": torch_ms,
+        "cpp_ips": cpp_ips,
+        "torch_ips": torch_ips,
+        "cpp_gflops": cpp_gflops,
+    }
+
+
+def write_table(path, rows):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    cpu = platform.processor() or platform.machine()
+    lines = [
+        "# CPU network",
+        "",
+        f"CPU: {cpu}.",
+        "",
+        f"Threads: {THREADS}. Warmup {WARMUP}, then the median of {REPEATS}. ",
+        "Dropout is off. Inputs are built once, outside the timer. ",
+        "The full row counts the four matmuls inside one forward. ",
+        "A layer row is that convolution or dense layer alone.",
+        "",
+        "| case | batch | cpp ms | torch ms | cpp img/s | torch img/s | cpp GFLOP/s |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+    ]
+    for row in rows:
+        lines.append(
+            f"| {row['case']} | {row['batch']} | {row['cpp_ms']:.3f} | {row['torch_ms']:.3f} | "
+            f"{row['cpp_ips']:.1f} | {row['torch_ips']:.1f} | {row['cpp_gflops']:.2f} |"
+        )
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    print(f"Wrote {path}")
 
 
 if __name__ == "__main__":
-    bench()
+    out = sys.argv[1] if len(sys.argv) > 1 else ROOT / "results" / "bench_cpu.md"
+    bench(out)

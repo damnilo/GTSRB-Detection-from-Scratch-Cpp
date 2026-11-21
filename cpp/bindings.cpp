@@ -20,7 +20,36 @@
 #include "Optimizers/include/SGD.h"
 #include "Optimizers/include/AdamW.h"
 
+#ifdef GTSRB_CUDA
+#include <cuda_runtime.h>
+#endif
+
+#include <stdexcept>
+#include <string>
+
 namespace py = pybind11;
+
+namespace {
+
+#ifdef GTSRB_CUDA
+struct DeviceInput {
+    float* data = nullptr;
+    size_t capacity = 0;
+};
+
+DeviceInput& device_input() {
+    static DeviceInput slot;
+    return slot;
+}
+
+void must_cuda(cudaError_t error, const char* what) {
+    if (error != cudaSuccess) {
+        throw std::runtime_error(std::string(what) + ": " + cudaGetErrorString(error));
+    }
+}
+#endif
+
+}  // namespace
 
 PYBIND11_MODULE(cpp, m) {
     m.doc() = "Neural Network Library Bindings";
@@ -31,6 +60,60 @@ PYBIND11_MODULE(cpp, m) {
         Dropout::seed(seed);
     }, py::arg("seed"));
     m.def("createNetwork", []() { return new Network(); }, py::return_value_policy::take_ownership);
+    m.def("cuda_available", []() {
+#ifdef GTSRB_CUDA
+        return true;
+#else
+        return false;
+#endif
+    });
+    m.def("forward_device", [](Network& network, py::array_t<float, py::array::c_style | py::array::forcecast> batch) -> py::tuple {
+#ifndef GTSRB_CUDA
+        (void)network;
+        (void)batch;
+        throw std::runtime_error("CUDA was not built");
+#else
+        py::buffer_info info = batch.request();
+        if (info.ndim != 4 || info.shape[1] != 3 || info.shape[2] != 32 || info.shape[3] != 32) {
+            throw std::runtime_error("forward_device expects an array of shape (N, 3, 32, 32)");
+        }
+        const auto count = static_cast<size_t>(info.shape[0]);
+        if (count < 1 || count > 64) {
+            throw std::runtime_error("forward_device batch must be from 1 to 64");
+        }
+
+        DeviceInput& slot = device_input();
+        if (count > slot.capacity) {
+            if (slot.data != nullptr) {
+                must_cuda(cudaFree(slot.data), "cudaFree");
+                slot.data = nullptr;
+            }
+            must_cuda(cudaMalloc(&slot.data, count * 3 * 32 * 32 * sizeof(float)), "cudaMalloc");
+            slot.capacity = count;
+        }
+
+        cudaEvent_t start = nullptr;
+        cudaEvent_t stop = nullptr;
+        must_cuda(cudaEventCreate(&start), "cudaEventCreate");
+        must_cuda(cudaEventCreate(&stop), "cudaEventCreate");
+        must_cuda(cudaEventRecord(start), "cudaEventRecord");
+        must_cuda(cudaMemcpy(
+            slot.data, info.ptr, count * 3 * 32 * 32 * sizeof(float), cudaMemcpyHostToDevice
+        ), "cudaMemcpy HtoD");
+        float* logits = network.forwardDevice(slot.data, count, 3, 32, 32);
+        py::array_t<float> out({static_cast<py::ssize_t>(count), static_cast<py::ssize_t>(43)});
+        must_cuda(cudaMemcpy(
+            out.mutable_data(), logits, count * 43 * sizeof(float), cudaMemcpyDeviceToHost
+        ), "cudaMemcpy DtoH");
+        must_cuda(cudaEventRecord(stop), "cudaEventRecord");
+        must_cuda(cudaEventSynchronize(stop), "cudaEventSynchronize");
+        float milliseconds = 0.0f;
+        must_cuda(cudaEventElapsedTime(&milliseconds, start, stop), "cudaEventElapsedTime");
+        cudaEventDestroy(start);
+        cudaEventDestroy(stop);
+        return py::make_tuple(out, milliseconds);
+#endif
+    }, py::arg("network"), py::arg("batch"));
 
     py::class_<Tensor>(m, "Tensor")
         .def(py::init<>())
