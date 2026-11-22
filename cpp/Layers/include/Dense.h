@@ -20,6 +20,7 @@ public:
     ~Dense() override;
     void releaseDevice();
     Dense(size_t inputSize, size_t outputSize);
+    size_t outputFeatures() const { return outputSize; }
 
     Tensor forward(const Tensor& input) override;
     float* forwardDevice(const float* input, size_t batch, size_t channels, size_t height, size_t width) override;

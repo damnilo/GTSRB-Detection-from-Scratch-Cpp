@@ -1,4 +1,6 @@
 #include "Layers/include/Network.h"
+#include "Layers/include/Conv2D.h"
+#include "Layers/include/Dense.h"
 #include "Layers/include/Flatten.h"
 #include "Layers/include/MaxPool2D.h"
 #include "Layers/include/SoftMax.h"
@@ -26,10 +28,17 @@ float* Network::forwardDevice(const float* input, size_t batch, size_t channels,
             break;
         }
         current = layer->forwardDevice(current, batch, c, h, w);
-        if (auto* pool = dynamic_cast<MaxPool2D*>(layer.get())) {
+        if (auto* conv = dynamic_cast<Conv2D*>(layer.get())) {
+            c = conv->outputChannels();
+            conv->outputSize(h, w, h, w);
+        } else if (auto* pool = dynamic_cast<MaxPool2D*>(layer.get())) {
             pool->outputSize(h, w, h, w);
         } else if (dynamic_cast<Flatten*>(layer.get()) != nullptr) {
             c *= h * w;
+            h = 1;
+            w = 1;
+        } else if (auto* dense = dynamic_cast<Dense*>(layer.get())) {
+            c = dense->outputFeatures();
             h = 1;
             w = 1;
         }

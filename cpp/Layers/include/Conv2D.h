@@ -40,6 +40,12 @@ public:
     Conv2D(size_t in_channels, size_t out_channels, size_t kernel_size, size_t stride = 1, size_t padding = 0);
     ~Conv2D() override;
 
+    size_t outputChannels() const { return out_channels; }
+    void outputSize(size_t inH, size_t inW, size_t& outH, size_t& outW) const {
+        outH = (inH + 2 * padding - kernel_size) / stride + 1;
+        outW = (inW + 2 * padding - kernel_size) / stride + 1;
+    }
+
     Tensor forward(const Tensor& input) override;
     float* forwardDevice(const float* input, size_t batch, size_t channels, size_t height, size_t width) override;
 
