@@ -1,6 +1,6 @@
 #include "Layers/include/MaxPool2D.h"
-#include "cuda/include/DeviceMemory.cuh"
-#include "cuda/include/MaxPool2D.cuh"
+#include "cuda/Utils/include/DeviceMemory.cuh"
+#include "cuda/Layers/include/MaxPool2D.cuh"
 
 struct PoolDevice {
     float* output = nullptr;

@@ -11,9 +11,14 @@ private:
     float rate;
     bool training;
     Tensor maskCache; // Per-element scale (0 if dropped, 1/(1-rate) if kept) — reused in backward()
+    void* device = nullptr;
+
+    void fillMask(size_t count);
 
 public:
     explicit Dropout(float rate);
+    ~Dropout() override;
+    void releaseDevice();
 
     // Seeds the generator that draws dropout masks. Independent from Tensor::seed,
     // so weight initialization does not shift the mask stream.
@@ -23,6 +28,7 @@ public:
     float* forwardDevice(const float* input, size_t batch, size_t channels, size_t height, size_t width) override;
     
     Tensor backward(const Tensor& gradOutput) override;
+    float* backwardDevice(const float* gradOutput, size_t batch) override;
 
     void setTraining(bool isTraining); // Must be set to false before evaluation/inference
     bool isTraining() const;

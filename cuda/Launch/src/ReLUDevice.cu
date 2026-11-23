@@ -1,6 +1,6 @@
 #include "Layers/include/ReLU.h"
-#include "cuda/include/DeviceMemory.cuh"
-#include "cuda/include/ReLU.cuh"
+#include "cuda/Utils/include/DeviceMemory.cuh"
+#include "cuda/Layers/include/ReLU.cuh"
 
 struct ReLUDevice {
     float* output = nullptr;

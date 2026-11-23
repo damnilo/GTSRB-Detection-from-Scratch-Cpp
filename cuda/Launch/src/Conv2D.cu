@@ -1,8 +1,8 @@
 #include "Layers/include/Conv2D.h"
-#include "cuda/include/Conv2D.cuh"
-#include "cuda/include/Convolution.cuh"
-#include "cuda/include/DeviceMemory.cuh"
-#include "cuda/include/TensorOps.cuh"
+#include "cuda/Launch/include/Conv2D.cuh"
+#include "cuda/Layers/include/Convolution.cuh"
+#include "cuda/Utils/include/DeviceMemory.cuh"
+#include "cuda/Utils/include/TensorOps.cuh"
 
 namespace {
 

@@ -1,7 +1,7 @@
 #pragma once
 
-#include "cuda/include/Convolution.cuh"
-#include "cuda/include/TensorOps.cuh"
+#include "cuda/Layers/include/Convolution.cuh"
+#include "cuda/Utils/include/TensorOps.cuh"
 
 #include <algorithm>
 #include <cmath>

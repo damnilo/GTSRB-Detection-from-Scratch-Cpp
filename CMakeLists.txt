@@ -70,19 +70,22 @@ if(CMAKE_CUDA_COMPILER)
 
     add_executable(bench_eval
         cpp_bench/bench_eval.cpp
-        cuda/src/TensorOps.cu
-        cuda/src/Convolution.cu
-        cuda/src/ReLU.cu
-        cuda/src/MaxPool2D.cu
-        cuda/src/SGD.cu
-        cuda/src/Conv2D.cu
-        cuda/src/ReLUDevice.cu
-        cuda/src/MaxPoolDevice.cu
-        cuda/src/DenseDevice.cu
-        cuda/src/BatchNorm2D.cu
-        cuda/src/BatchNormDevice.cu
+        cuda/Utils/src/TensorOps.cu
+        cuda/Layers/src/Convolution.cu
+        cuda/Layers/src/ReLU.cu
+        cuda/Layers/src/MaxPool2D.cu
+        cuda/Layers/src/Dropout.cu
+        cuda/Optimizers/src/SGD.cu
+        cuda/Launch/src/Conv2D.cu
+        cuda/Launch/src/ReLUDevice.cu
+        cuda/Launch/src/MaxPoolDevice.cu
+        cuda/Launch/src/DenseDevice.cu
+        cuda/Launch/src/DropoutDevice.cu
+        cuda/Layers/src/BatchNorm2D.cu
+        cuda/Launch/src/BatchNormDevice.cu
         cpp/Utils/src/Tensor.cpp
         cpp/Utils/src/Kernel.cpp
+        cpp/Layers/src/Network.cpp
         cpp/Layers/src/Conv2D.cpp
         cpp/Layers/src/ReLU.cpp
         cpp/Layers/src/MaxPool2D.cpp
@@ -106,16 +109,18 @@ if(CMAKE_CUDA_COMPILER)
     # The Python module stays CPU-only unless this configure found nvcc.
     if(TARGET cpp)
         target_sources(cpp PRIVATE
-            cuda/src/TensorOps.cu
-            cuda/src/Convolution.cu
-            cuda/src/ReLU.cu
-            cuda/src/MaxPool2D.cu
-            cuda/src/Conv2D.cu
-            cuda/src/ReLUDevice.cu
-            cuda/src/MaxPoolDevice.cu
-            cuda/src/DenseDevice.cu
-            cuda/src/BatchNorm2D.cu
-            cuda/src/BatchNormDevice.cu
+            cuda/Utils/src/TensorOps.cu
+            cuda/Layers/src/Convolution.cu
+            cuda/Layers/src/ReLU.cu
+            cuda/Layers/src/MaxPool2D.cu
+            cuda/Layers/src/Dropout.cu
+            cuda/Launch/src/Conv2D.cu
+            cuda/Launch/src/ReLUDevice.cu
+            cuda/Launch/src/MaxPoolDevice.cu
+            cuda/Launch/src/DenseDevice.cu
+            cuda/Launch/src/DropoutDevice.cu
+            cuda/Layers/src/BatchNorm2D.cu
+            cuda/Launch/src/BatchNormDevice.cu
         )
         target_compile_definitions(cpp PRIVATE GTSRB_CUDA)
         target_include_directories(cpp PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

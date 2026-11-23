@@ -46,6 +46,17 @@ float* Network::forwardDevice(const float* input, size_t batch, size_t channels,
     return const_cast<float*>(current);
 }
 
+float* Network::backwardDevice(const float* gradOutput, size_t batch) {
+    const float* current = gradOutput;
+    for (auto it = layers.rbegin(); it != layers.rend(); ++it) {
+        if (dynamic_cast<SoftMax*>(it->get()) != nullptr) {
+            continue;
+        }
+        current = (*it)->backwardDevice(current, batch);
+    }
+    return const_cast<float*>(current);
+}
+
 // Backward pass: walks layers in reverse, since gradients flow from the loss
 // back toward the input — mirror image of forward().
 Tensor Network::backward(const Tensor& gradOutput) {
