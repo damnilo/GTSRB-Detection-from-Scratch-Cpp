@@ -8,6 +8,11 @@ struct ConvDevice {
     float* weights = nullptr;
     float* weightsT = nullptr;
     float* bias = nullptr;
+    float* gradSpatialT = nullptr;
+    float* dCol = nullptr;
+    float* gradInput = nullptr;
+    float* gradWeights = nullptr;
+    float* gradBias = nullptr;
     size_t batch = 0;
     size_t channels = 0;
     size_t height = 0;

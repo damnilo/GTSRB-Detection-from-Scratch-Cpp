@@ -19,7 +19,10 @@ __device__ float blockReduce(float value) {
 
     }
 
-    return shared[0];
+    const float total = shared[0];
+    __syncthreads();
+    
+    return total;
 }
 
 __global__ void cudaBatchNormForward(
