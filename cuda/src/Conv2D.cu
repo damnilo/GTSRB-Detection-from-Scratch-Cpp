@@ -56,6 +56,38 @@ void launchSpatial(const float* spatial, float* nchw, size_t batch, size_t chann
     mustCuda(cudaGetLastError());
 }
 
+void launchToSpatial(const float* nchw, float* spatial, size_t batch, size_t channels, size_t height, size_t width) {
+    const size_t count = batch * channels * height * width;
+    const unsigned block = 256;
+    const unsigned grid = static_cast<unsigned>((count + block - 1) / block);
+    cudaNCHWSpatial<<<grid, block>>>(nchw, spatial, batch, channels, height, width);
+    mustCuda(cudaGetLastError());
+}
+
+void launchSumRows(const float* matrix, float* sum, size_t rows, size_t cols) {
+    const unsigned block = 256;
+    const unsigned grid = static_cast<unsigned>((cols + block - 1) / block);
+    cudaSumRows<<<grid, block>>>(matrix, sum, rows, cols);
+    mustCuda(cudaGetLastError());
+}
+
+void launchCol2Im(
+    const float* col,
+    float* grad,
+    size_t batch,
+    size_t channels,
+    size_t height,
+    size_t width,
+    size_t kernel,
+    size_t stride,
+    size_t padding
+) {
+    dim3 block(32, 1);
+    dim3 grid(static_cast<unsigned>((batch + block.x - 1) / block.x), static_cast<unsigned>(channels));
+    cudaCol2Im<<<grid, block>>>(col, grad, kernel, stride, padding, batch, channels, height, width);
+    mustCuda(cudaGetLastError());
+}
+
 }  // namespace
 
 void Conv2D::releaseDevice() {
@@ -69,6 +101,11 @@ void Conv2D::releaseDevice() {
     freeFloats(state->weights);
     freeFloats(state->weightsT);
     freeFloats(state->bias);
+    freeFloats(state->gradSpatialT);
+    freeFloats(state->dCol);
+    freeFloats(state->gradInput);
+    freeFloats(state->gradWeights);
+    freeFloats(state->gradBias);
     delete state;
     device = nullptr;
 }
@@ -92,6 +129,8 @@ float* Conv2D::forwardDevice(const float* input, size_t batch, size_t channels, 
         state->weights = allocFloats(out_channels * row);
         state->weightsT = allocFloats(out_channels * row);
         state->bias = allocFloats(out_channels);
+        state->gradWeights = allocFloats(out_channels * row);
+        state->gradBias = allocFloats(out_channels);
         mustCuda(cudaMemcpy(state->weights, weights.raw().data(), out_channels * row * sizeof(float), cudaMemcpyHostToDevice));
         mustCuda(cudaMemcpy(state->bias, biases.raw().data(), out_channels * sizeof(float), cudaMemcpyHostToDevice));
         launchTranspose(state->weights, state->weightsT, out_channels, row);
@@ -104,9 +143,15 @@ float* Conv2D::forwardDevice(const float* input, size_t batch, size_t channels, 
         freeFloats(state->col);
         freeFloats(state->spatial);
         freeFloats(state->nchw);
+        freeFloats(state->gradSpatialT);
+        freeFloats(state->dCol);
+        freeFloats(state->gradInput);
         state->col = allocFloats(spatial * row);
         state->spatial = allocFloats(spatial * out_channels);
         state->nchw = allocFloats(batch * out_channels * outH * outW);
+        state->gradSpatialT = allocFloats(spatial * out_channels);
+        state->dCol = allocFloats(spatial * row);
+        state->gradInput = allocFloats(batch * channels * height * width);
         state->batch = batch;
         state->channels = channels;
         state->height = height;
@@ -118,6 +163,34 @@ float* Conv2D::forwardDevice(const float* input, size_t batch, size_t channels, 
     launchBias(state->spatial, state->bias, spatial, out_channels);
     launchSpatial(state->spatial, state->nchw, batch, out_channels, outH, outW);
     return state->nchw;
+}
+
+float* Conv2D::backwardDevice(const float* gradOutput, size_t batch) {
+    auto* state = static_cast<ConvDevice*>(device);
+    if (state == nullptr || state->batch == 0 || batch != state->batch || state->col == nullptr) {
+        throw std::runtime_error("Conv2D device backward requires a matching forward");
+    }
+
+    const size_t channels = state->channels;
+    const size_t height = state->height;
+    const size_t width = state->width;
+    const size_t row = channels * kernel_size * kernel_size;
+    const size_t outH = (height + 2 * padding - kernel_size) / stride + 1;
+    const size_t outW = (width + 2 * padding - kernel_size) / stride + 1;
+    const size_t spatial = batch * outH * outW;
+
+    launchToSpatial(gradOutput, state->spatial, batch, out_channels, outH, outW);
+    launchTranspose(state->spatial, state->gradSpatialT, spatial, out_channels);
+    launchGemm(state->gradSpatialT, state->col, state->gradWeights, out_channels, row, spatial);
+    launchSumRows(state->spatial, state->gradBias, spatial, out_channels);
+    launchGemm(state->spatial, state->weights, state->dCol, spatial, row, out_channels);
+    mustCuda(cudaMemset(state->gradInput, 0, batch * channels * height * width * sizeof(float)));
+    launchCol2Im(state->dCol, state->gradInput, batch, channels, height, width, kernel_size, stride, padding);
+
+    const size_t weightBytes = out_channels * row * sizeof(float);
+    mustCuda(cudaMemcpyAsync(gradWeights.raw().data(), state->gradWeights, weightBytes, cudaMemcpyDeviceToHost));
+    mustCuda(cudaMemcpyAsync(gradBiases.raw().data(), state->gradBias, out_channels * sizeof(float), cudaMemcpyDeviceToHost));
+    return state->gradInput;
 }
 
 float* Conv2D::deviceOutput() const {

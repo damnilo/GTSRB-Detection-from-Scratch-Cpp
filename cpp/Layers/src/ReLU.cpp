@@ -13,6 +13,12 @@ float* ReLU::forwardDevice(const float* input, size_t batch, size_t channels, si
     (void)width;
     throw std::runtime_error("CUDA was not built");
 }
+
+float* ReLU::backwardDevice(const float* gradOutput, size_t batch) {
+    (void)gradOutput;
+    (void)batch;
+    throw std::runtime_error("CUDA was not built");
+}
 #endif
 
 // Stores a binary mask alongside the clamped output so backward() can route

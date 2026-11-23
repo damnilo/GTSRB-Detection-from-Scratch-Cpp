@@ -59,4 +59,10 @@ float* Dense::forwardDevice(const float* input, size_t batch, size_t channels, s
     (void)width;
     throw std::runtime_error("CUDA was not built");
 }
+
+float* Dense::backwardDevice(const float* gradOutput, size_t batch) {
+    (void)gradOutput;
+    (void)batch;
+    throw std::runtime_error("CUDA was not built");
+}
 #endif

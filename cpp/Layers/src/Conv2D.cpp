@@ -215,4 +215,10 @@ float* Conv2D::deviceOutput() const {
     return nullptr;
 }
 
+float* Conv2D::backwardDevice(const float* gradOutput, size_t batch) {
+    (void)gradOutput;
+    (void)batch;
+    throw std::runtime_error("CUDA was not built");
+}
+
 #endif

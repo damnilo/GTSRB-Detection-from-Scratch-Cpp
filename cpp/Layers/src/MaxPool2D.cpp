@@ -83,4 +83,10 @@ float* MaxPool2D::forwardDevice(const float* input, size_t batch, size_t channel
     (void)width;
     throw std::runtime_error("CUDA was not built");
 }
+
+float* MaxPool2D::backwardDevice(const float* gradOutput, size_t batch) {
+    (void)gradOutput;
+    (void)batch;
+    throw std::runtime_error("CUDA was not built");
+}
 #endif
