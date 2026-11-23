@@ -167,7 +167,7 @@ python eval.py --checkpoint checkpoints/A/seed42 --device cpu
 python eval.py --checkpoint checkpoints/A/seed42 --device cuda
 ```
 
-The CUDA command needs a module built with `nvcc`. It refuses a BatchNorm checkpoint. The first batch must match the CPU logits to `1e-4` before the official test runs. Results go to `results/test_metrics_cuda.json`. `python gradcam.py` writes `results/failures.md` and the panels in `results/gradcam/`. The gallery checked in with this repository is checkpoint `checkpoints/C/seed42`: 679 of 12,630 test images are wrong, 38 of them read the 100 km/h sign as 120 km/h, and 14 read pedestrians as bicycles crossing.
+The CUDA command needs a module built with `nvcc`. It refuses a BatchNorm checkpoint. The first batch must match the CPU logits to `1e-4` before the official test runs. Results go to `results/test_metrics_cuda.json`. On a Tesla T4 that file records 95.273% (12,033 / 12,630) and 27,096.176 images/s for `checkpoints/A/seed42`. `python gradcam.py` writes `results/failures.md` and the panels in `results/gradcam/`. The gallery checked in with this repository is checkpoint `checkpoints/C/seed42`: 679 of 12,630 test images are wrong, 38 of them read the 100 km/h sign as 120 km/h, and 14 read pedestrians as bicycles crossing.
 
 ---
 
@@ -203,7 +203,7 @@ At batch 64 the full C++ forward takes 30.933 ms (2,069 images/s). The PyTorch t
 
 ## CUDA
 
-The device path is checked by `cpp_bench/bench_eval`. It is not what `python eval.py` calls. Numbers below are from a Tesla T4, in `results/bench_cuda.md`. Tiled GEMM and cuBLAS matched the CPU product to `1e-4`. The custom tiled GEMM is not faster than cuBLAS on either convolution shape.
+The device path is checked by `cpp_bench/bench_eval` and by `python eval.py --checkpoint checkpoints/A/seed42 --device cuda`. Numbers below are from a Tesla T4. The GEMM rows are in `results/bench_cuda.md`. Tiled GEMM and cuBLAS matched the CPU product to `1e-4`. The custom tiled GEMM is not faster than cuBLAS on either convolution shape.
 
 | shape | backend | ms | img/s |
 | --- | --- | ---: | ---: |
@@ -224,6 +224,8 @@ Model A, batch 64, no BatchNorm, dropout off. Logits are the last dense output, 
 | one batch copy | 3.336 | 19185.020 |
 
 The CPU matmul row includes allocating the result. On the multiply alone, copies dominate. On the full forward they do not: one upload of the batch and one download of the logits adds about 0.2 ms.
+
+The official test of `checkpoints/A/seed42` is in `results/test_metrics_cuda.json`. Accuracy is 95.273% (12,033 / 12,630) and macro F1 is 92.629%, the same values as that checkpoint's CPU `metrics.json`. The first batch matched the CPU logits to `1e-4`. The timed pass took 466.117 ms (27,096.176 images/s): every test batch is uploaded, the kernels run, and the logits are downloaded, with the weights already on the device. The table above is the median of ten batch-64 runs.
 
 ---
 
@@ -276,7 +278,6 @@ The CPU matmul row includes allocating the result. On the multiply alone, copies
 ## Future Improvements
 
 * AVX2 microkernel and fewer activation copies
-* Official-test accuracy of `eval.py --device cuda` on a Tesla T4 (the command exists; the number is not recorded yet)
 * One GPU training epoch
 * More than 10 epochs for the AdamW run, at the learning rate used above
 * Residual architectures

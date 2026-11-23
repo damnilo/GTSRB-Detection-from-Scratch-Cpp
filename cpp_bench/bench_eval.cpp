@@ -1,3 +1,4 @@
+#include "Layers/include/BatchNorm2D.h"
 #include "Layers/include/Conv2D.h"
 #include "Layers/include/Dense.h"
 #include "Layers/include/Dropout.h"
@@ -726,8 +727,71 @@ void write_section(const std::string& path, const std::string& gpu, float reside
     out << "| --- | ---: | ---: |\n";
     out << std::fixed << std::setprecision(3);
     out << "| kernels on device | " << resident_ms << " | " << images_per_second(kBatch, resident_ms) << " |\n";
-    out << "| one batch copy | " << transfer_ms << " | " << images_per_second(kBatch, transfer_ms) << " |\n";
+    out << "| one batch copy | " << transfer_ms << " | " << images_per_second(kBatch, transfer_ms) << " |\n\n";
+    out << "BatchNorm2D train and eval, batch 64, matched the CPU layer within 1e-4 ";
+    out << "for 16 channels at 32x32 and 32 channels at 16x16.\n";
     std::cout << "Wrote " << path << "\n";
+}
+
+bool batch_norm_matches(size_t channels, size_t height, size_t width) {
+    BatchNorm2D layer(channels);
+    const std::vector<Tensor*> params = layer.parameters();
+    for (size_t c = 0; c < channels; ++c) {
+        params[0]->raw()[c] = 0.5f + 0.01f * static_cast<float>(c);
+        params[1]->raw()[c] = -0.25f + 0.02f * static_cast<float>(c);
+    }
+
+    Tensor input({kBatch, channels, height, width});
+    for (size_t i = 0; i < input.size(); ++i) {
+        input.raw()[i] = static_cast<float>(static_cast<int>(i % 19) - 9) * 0.05f;
+    }
+    const std::vector<float> initial_mean = layer.runningMeanBuffer()->raw();
+    const std::vector<float> initial_var = layer.runningVarBuffer()->raw();
+
+    DeviceBuffer<float> device_input(input.size());
+    device_input.copy_from(input.raw());
+    float* device_y = layer.forwardDevice(device_input.get(), kBatch, channels, height, width);
+    must(cudaDeviceSynchronize(), "batch norm forward");
+
+    const std::vector<float> got_y = copy_floats(device_y, input.size());
+    const std::vector<float> got_mean = layer.runningMeanBuffer()->raw();
+    const std::vector<float> got_var = layer.runningVarBuffer()->raw();
+    layer.runningMeanBuffer()->raw() = initial_mean;
+    layer.runningVarBuffer()->raw() = initial_var;
+    const Tensor cpu_y = layer.forward(input);
+
+    const std::string name = "bn" + std::to_string(channels);
+    bool ok = true;
+    ok = report(name, "forward", got_y, cpu_y.raw()) && ok;
+    ok = report(name, "running mean", got_mean, layer.runningMeanBuffer()->raw()) && ok;
+    ok = report(name, "running var", got_var, layer.runningVarBuffer()->raw()) && ok;
+
+    Tensor grad_y(input.getShape());
+    for (size_t i = 0; i < grad_y.size(); ++i) {
+        grad_y.raw()[i] = static_cast<float>(static_cast<int>(i % 13) - 6) * 0.03f;
+    }
+    const Tensor cpu_grad = layer.backward(grad_y);
+    const std::vector<Tensor*> grads = layer.gradients();
+    const std::vector<float> cpu_gamma = grads[0]->raw();
+    const std::vector<float> cpu_beta = grads[1]->raw();
+    DeviceBuffer<float> device_grad_y(grad_y.size());
+    device_grad_y.copy_from(grad_y.raw());
+    float* device_grad = layer.backwardDevice(device_grad_y.get(), kBatch);
+    must(cudaDeviceSynchronize(), "batch norm backward");
+    ok = report(name, "grad input", copy_floats(device_grad, input.size()), cpu_grad.raw()) && ok;
+    ok = report(name, "grad gamma", grads[0]->raw(), cpu_gamma) && ok;
+    ok = report(name, "grad beta", grads[1]->raw(), cpu_beta) && ok;
+
+    const std::vector<float> trained_mean = layer.runningMeanBuffer()->raw();
+    const std::vector<float> trained_var = layer.runningVarBuffer()->raw();
+    layer.setTraining(false);
+    const Tensor cpu_eval = layer.forward(input);
+    float* device_eval = layer.forwardDevice(device_input.get(), kBatch, channels, height, width);
+    must(cudaDeviceSynchronize(), "batch norm eval");
+    ok = report(name, "eval", copy_floats(device_eval, input.size()), cpu_eval.raw()) && ok;
+    ok = report(name, "eval running mean", layer.runningMeanBuffer()->raw(), trained_mean) && ok;
+    ok = report(name, "eval running var", layer.runningVarBuffer()->raw(), trained_var) && ok;
+    return ok;
 }
 
 }  // namespace
@@ -870,43 +934,47 @@ int main(int argc, char** argv) {
         d_w1t.get(), d_b1.get(), d_w2t.get(), d_b2.get(),
         d_w3.get(), d_b3.get(), d_w4.get(), d_b4.get()
     };
-    auto run_layers = [&] {
-        float* p = conv1.forwardDevice(d_x.get(), kBatch, 3, 32, 32);
-        p = relu1.forwardDevice(p, kBatch, kConv1Out, 32, 32);
-        p = pool1.forwardDevice(p, kBatch, kConv1Out, 32, 32);
-        p = conv2.forwardDevice(p, kBatch, kConv1Out, 16, 16);
-        p = relu2.forwardDevice(p, kBatch, kConv2Out, 16, 16);
-        p = pool2.forwardDevice(p, kBatch, kConv2Out, 16, 16);
-        p = flatten.forwardDevice(p, kBatch, kConv2Out, 8, 8);
-        p = dense1.forwardDevice(p, kBatch, kFlatCount / kBatch, 1, 1);
-        p = relu3.forwardDevice(p, kBatch, kHidden, 1, 1);
-        p = dropout.forwardDevice(p, kBatch, kHidden, 1, 1);
-        return dense2.forwardDevice(p, kBatch, kHidden, 1, 1);
+    struct LayerOut {
+        float* conv1;
+        float* relu1;
+        float* pool1;
+        float* conv2;
+        float* relu2;
+        float* pool2;
+        float* flat;
+        float* dense1;
+        float* relu3;
+        float* logits;
     };
-    float* y1 = conv1.forwardDevice(d_x.get(), kBatch, 3, 32, 32);
-    float* y1a = relu1.forwardDevice(y1, kBatch, kConv1Out, 32, 32);
-    float* pooled1 = pool1.forwardDevice(y1a, kBatch, kConv1Out, 32, 32);
-    float* y2 = conv2.forwardDevice(pooled1, kBatch, kConv1Out, 16, 16);
-    float* y2a = relu2.forwardDevice(y2, kBatch, kConv2Out, 16, 16);
-    float* pooled2 = pool2.forwardDevice(y2a, kBatch, kConv2Out, 16, 16);
-    float* flat = flatten.forwardDevice(pooled2, kBatch, kConv2Out, 8, 8);
-    float* hidden = dense1.forwardDevice(flat, kBatch, kFlatCount / kBatch, 1, 1);
-    float* hiddenA = relu3.forwardDevice(hidden, kBatch, kHidden, 1, 1);
-    float* dropped = dropout.forwardDevice(hiddenA, kBatch, kHidden, 1, 1);
-    float* layer_logits = dense2.forwardDevice(dropped, kBatch, kHidden, 1, 1);
+    auto run_layers = [&] {
+        LayerOut out{};
+        out.conv1 = conv1.forwardDevice(d_x.get(), kBatch, 3, 32, 32);
+        out.relu1 = relu1.forwardDevice(out.conv1, kBatch, kConv1Out, 32, 32);
+        out.pool1 = pool1.forwardDevice(out.relu1, kBatch, kConv1Out, 32, 32);
+        out.conv2 = conv2.forwardDevice(out.pool1, kBatch, kConv1Out, 16, 16);
+        out.relu2 = relu2.forwardDevice(out.conv2, kBatch, kConv2Out, 16, 16);
+        out.pool2 = pool2.forwardDevice(out.relu2, kBatch, kConv2Out, 16, 16);
+        out.flat = flatten.forwardDevice(out.pool2, kBatch, kConv2Out, 8, 8);
+        out.dense1 = dense1.forwardDevice(out.flat, kBatch, kFlatCount / kBatch, 1, 1);
+        out.relu3 = relu3.forwardDevice(out.dense1, kBatch, kHidden, 1, 1);
+        float* dropped = dropout.forwardDevice(out.relu3, kBatch, kHidden, 1, 1);
+        out.logits = dense2.forwardDevice(dropped, kBatch, kHidden, 1, 1);
+        return out;
+    };
+    const LayerOut layers = run_layers();
     must(cudaDeviceSynchronize(), "layer forward");
 
     bool ok = true;
-    ok = report("eval", "conv1", copy_floats(y1, kConv1Count), cpu_conv1.raw()) && ok;
-    ok = report("eval", "relu1", copy_floats(y1a, kConv1Count), cpu_relu1.raw()) && ok;
-    ok = report("eval", "pool1", copy_floats(pooled1, kPool1Count), cpu_pool1.raw()) && ok;
-    ok = report("eval", "conv2", copy_floats(y2, kConv2Count), cpu_conv2.raw()) && ok;
-    ok = report("eval", "relu2", copy_floats(y2a, kConv2Count), cpu_relu2.raw()) && ok;
-    ok = report("eval", "pool2", copy_floats(pooled2, kFlatCount), cpu_pool2.raw()) && ok;
-    ok = report("eval", "flatten", copy_floats(flat, kFlatCount), cpu_flat.raw()) && ok;
-    ok = report("eval", "dense1", copy_floats(hidden, kHiddenCount), cpu_dense1.raw()) && ok;
-    ok = report("eval", "relu3", copy_floats(hiddenA, kHiddenCount), cpu_relu3.raw()) && ok;
-    ok = report("eval", "logits", copy_floats(layer_logits, kLogitCount), cpu_logits.raw()) && ok;
+    ok = report("eval", "conv1", copy_floats(layers.conv1, kConv1Count), cpu_conv1.raw()) && ok;
+    ok = report("eval", "relu1", copy_floats(layers.relu1, kConv1Count), cpu_relu1.raw()) && ok;
+    ok = report("eval", "pool1", copy_floats(layers.pool1, kPool1Count), cpu_pool1.raw()) && ok;
+    ok = report("eval", "conv2", copy_floats(layers.conv2, kConv2Count), cpu_conv2.raw()) && ok;
+    ok = report("eval", "relu2", copy_floats(layers.relu2, kConv2Count), cpu_relu2.raw()) && ok;
+    ok = report("eval", "pool2", copy_floats(layers.pool2, kFlatCount), cpu_pool2.raw()) && ok;
+    ok = report("eval", "flatten", copy_floats(layers.flat, kFlatCount), cpu_flat.raw()) && ok;
+    ok = report("eval", "dense1", copy_floats(layers.dense1, kHiddenCount), cpu_dense1.raw()) && ok;
+    ok = report("eval", "relu3", copy_floats(layers.relu3, kHiddenCount), cpu_relu3.raw()) && ok;
+    ok = report("eval", "logits", copy_floats(layers.logits, kLogitCount), cpu_logits.raw()) && ok;
 
     if (!ok) {
         std::cerr << "CUDA eval disagrees with the CPU stack by more than 1e-4 of the result size\n";
@@ -917,7 +985,7 @@ int main(int argc, char** argv) {
     std::vector<float> logits_host(kLogitCount);
     const float transfer_ms = median_ms([&] {
         d_x.copy_from(input.raw());
-        const float* logits = run_layers();
+        const float* logits = run_layers().logits;
         must(cudaMemcpy(logits_host.data(), logits, kLogitCount * sizeof(float), cudaMemcpyDeviceToHost), "cudaMemcpy DtoH");
     });
 
@@ -936,12 +1004,16 @@ int main(int argc, char** argv) {
         std::cerr << "CUDA backward or the SGD step disagrees with the CPU stack by more than 1e-4 of the result size\n";
         return 1;
     }
+    if (!batch_norm_matches(kConv1Out, 32, 32) || !batch_norm_matches(kConv2Out, 16, 16)) {
+        std::cerr << "CUDA BatchNorm disagrees with the CPU layer by more than 1e-4 of the result size\n";
+        return 1;
+    }
 
     cudaDeviceProp prop{};
     must(cudaGetDeviceProperties(&prop, 0), "cudaGetDeviceProperties");
     const std::string path = argc > 1 ? argv[1] : "results/bench_cuda.md";
     write_gemm_table(path, prop.name, rows);
     write_section(path, prop.name, resident_ms, transfer_ms);
-    std::cout << "CUDA eval matches the CPU logits, gradients, and one SGD step within 1e-4\n";
+    std::cout << "CUDA eval matches the CPU logits, gradients, one SGD step, and BatchNorm within 1e-4\n";
     return 0;
 }

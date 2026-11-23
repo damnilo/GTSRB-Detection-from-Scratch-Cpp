@@ -31,6 +31,27 @@ BatchNorm2D::BatchNorm2D(size_t channels)
     gradBeta.fill(0.0f);
 }
 
+BatchNorm2D::~BatchNorm2D() { releaseDevice(); }
+
+#ifndef GTSRB_CUDA
+void BatchNorm2D::releaseDevice() {}
+
+float* BatchNorm2D::forwardDevice(const float* input, size_t batch, size_t channels, size_t height, size_t width) {
+    (void)input;
+    (void)batch;
+    (void)channels;
+    (void)height;
+    (void)width;
+    throw std::runtime_error("CUDA was not built");
+}
+
+float* BatchNorm2D::backwardDevice(const float* gradOutput, size_t batch) {
+    (void)gradOutput;
+    (void)batch;
+    throw std::runtime_error("CUDA was not built");
+}
+#endif
+
 // y = gamma * (x - mean) / sqrt(var + eps) + beta.
 // The forward variance divides by N*H*W. The running variance stores the
 // unbiased estimate, divided by N*H*W - 1, which is what nn.BatchNorm2d keeps.
