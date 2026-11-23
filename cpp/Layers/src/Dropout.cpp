@@ -15,6 +15,18 @@ void Dropout::seed(unsigned int seed) {
 
 Dropout::Dropout(float rate) : rate(rate), training(true) {}
 
+Dropout::~Dropout() { releaseDevice(); }
+
+void Dropout::fillMask(size_t count) {
+    maskCache = Tensor({count});
+    std::uniform_real_distribution<float> dist(0.0f, 1.0f);
+    const float scale = 1.0f / (1.0f - rate);
+    for (size_t i = 0; i < count; ++i) {
+        bool keep = dist(dropoutRng()) > rate;
+        maskCache[i] = keep ? scale : 0.0f;
+    }
+}
+
 // In eval mode (or rate == 0), this is a no-op pass-through — inverted dropout's
 // train-time scaling means no compensating scale-down is needed at inference.
 Tensor Dropout::forward(const Tensor& input) {
@@ -22,14 +34,7 @@ Tensor Dropout::forward(const Tensor& input) {
         return input;
     }
 
-    maskCache = Tensor(input.getShape());
-    std::uniform_real_distribution<float> dist(0.0f, 1.0f);
-    const float scale = 1.0f / (1.0f - rate);
-
-    for (size_t i = 0; i < input.size(); ++i) {
-        bool keep = dist(dropoutRng()) > rate;
-        maskCache[i] = keep ? scale : 0.0f;
-    }
+    fillMask(input.size());
 
     Tensor output(input.getShape());
     for (size_t i = 0; i < input.size(); ++i) {
@@ -54,16 +59,24 @@ Tensor Dropout::backward(const Tensor& gradOutput) {
     return gradInput;
 }
 
+#ifndef GTSRB_CUDA
+void Dropout::releaseDevice() {}
+
+float* Dropout::backwardDevice(const float* gradOutput, size_t batch) {
+    (void)batch;
+    (void)gradOutput;
+    throw std::runtime_error("CUDA was not built");
+}
+
 float* Dropout::forwardDevice(const float* input, size_t batch, size_t channels, size_t height, size_t width) {
+    (void)input;
     (void)batch;
     (void)channels;
     (void)height;
     (void)width;
-    if (training) {
-        throw std::runtime_error("Device dropout is implemented for eval only");
-    }
-    return const_cast<float*>(input);
+    throw std::runtime_error("CUDA was not built");
 }
+#endif
 
 void Dropout::setTraining(bool isTraining) {
     training = isTraining;
