@@ -31,6 +31,11 @@ float* Flatten::forwardDevice(const float* input, size_t batch, size_t channels,
     return const_cast<float*>(input);
 }
 
+float* Flatten::backwardDevice(const float* gradOutput, size_t batch) {
+    (void)batch;
+    return const_cast<float*>(gradOutput);
+}
+
 Tensor Flatten::backward(const Tensor& gradOutput) {
     Tensor gradInput = gradOutput;
     gradInput.reshape(inputShapeCache);
