@@ -1,3 +1,4 @@
+#include "Layers/include/Network.h"
 #include "Layers/include/BatchNorm2D.h"
 #include "Layers/include/Conv2D.h"
 #include "Layers/include/Dense.h"
@@ -9,9 +10,9 @@
 #include "Loss/include/CrossEntropy.h"
 #include "Optimizers/include/SGD.h"
 #include "cpp_bench/bench_cuda.h"
-#include "cuda/include/SGD.cuh"
-#include "cuda/include/MaxPool2D.cuh"
-#include "cuda/include/ReLU.cuh"
+#include "cuda/Optimizers/include/SGD.cuh"
+#include "cuda/Layers/include/MaxPool2D.cuh"
+#include "cuda/Layers/include/ReLU.cuh"
 
 #include <cublas_v2.h>
 
@@ -730,7 +731,7 @@ void write_section(const std::string& path, const std::string& gpu, float reside
     out << "| one batch copy | " << transfer_ms << " | " << images_per_second(kBatch, transfer_ms) << " |\n\n";
     out << "BatchNorm2D train and eval, batch 64, matched the CPU layer within 1e-4 ";
     out << "for 16 channels at 32x32 and 32 channels at 16x16.\n";
-    out << "Device backward of Conv2D, ReLU, MaxPool2D, and Dense matched the CPU stack within 1e-4.\n";
+    out << "Network::backwardDevice, from the logit gradient and stopping before SoftMax, matched the CPU stack within 1e-4.\n";
     std::cout << "Wrote " << path << "\n";
 }
 
@@ -795,71 +796,63 @@ bool batch_norm_matches(size_t channels, size_t height, size_t width) {
     return ok;
 }
 
-// Walks backwardDevice from the logit gradient. Flatten is a view and dropout is
-// off, so those two pass the pointer through. Parameter gradients are copied
-// back onto the host tensors; the caller must keep the CPU copies if it still
-// needs them.
-bool layer_backward_matches(
+// The network does not own these layers. Their device caches already come from forwardDevice.
+bool network_backward_matches(
     Conv2D& conv1,
     ReLU& relu1,
     MaxPool2D& pool1,
     Conv2D& conv2,
     ReLU& relu2,
     MaxPool2D& pool2,
+    Flatten& flatten,
     Dense& dense1,
     ReLU& relu3,
+    Dropout& dropout,
     Dense& dense2,
+    SoftMax& softmax,
     const Tensor& grad_logits,
-    const Tensor& grad_ha,
-    const Tensor& grad_h,
-    const Tensor& grad_flat,
-    const Tensor& grad_y2a,
-    const Tensor& grad_y2,
-    const Tensor& grad_pool1,
-    const Tensor& grad_y1a,
-    const Tensor& grad_y1,
     const Tensor& grad_x,
-    std::vector<float>& cpu_w1,
-    std::vector<float>& cpu_b1,
-    std::vector<float>& cpu_w2,
-    std::vector<float>& cpu_b2,
-    std::vector<float>& cpu_w3,
-    std::vector<float>& cpu_b3,
-    std::vector<float>& cpu_w4,
-    std::vector<float>& cpu_b4
+    const std::vector<float>& cpu_w1,
+    const std::vector<float>& cpu_b1,
+    const std::vector<float>& cpu_w2,
+    const std::vector<float>& cpu_b2,
+    const std::vector<float>& cpu_w3,
+    const std::vector<float>& cpu_b3,
+    const std::vector<float>& cpu_w4,
+    const std::vector<float>& cpu_b4
 ) {
+    auto alias = [](Layer* layer) {
+        return std::shared_ptr<Layer>(layer, [](Layer*) {});
+    };
+    Network network;
+    network.addLayer(alias(&conv1));
+    network.addLayer(alias(&relu1));
+    network.addLayer(alias(&pool1));
+    network.addLayer(alias(&conv2));
+    network.addLayer(alias(&relu2));
+    network.addLayer(alias(&pool2));
+    network.addLayer(alias(&flatten));
+    network.addLayer(alias(&dense1));
+    network.addLayer(alias(&relu3));
+    network.addLayer(alias(&dropout));
+    network.addLayer(alias(&dense2));
+    network.addLayer(alias(&softmax));
+
     DeviceBuffer<float> device_grad_logits(grad_logits.size());
     device_grad_logits.copy_from(grad_logits.raw());
-
-    float* d_ha = dense2.backwardDevice(device_grad_logits.get(), kBatch);
-    float* d_h = relu3.backwardDevice(d_ha, kBatch);
-    float* d_flat = dense1.backwardDevice(d_h, kBatch);
-    float* d_y2a = pool2.backwardDevice(d_flat, kBatch);
-    float* d_y2 = relu2.backwardDevice(d_y2a, kBatch);
-    float* d_pool1 = conv2.backwardDevice(d_y2, kBatch);
-    float* d_y1a = pool1.backwardDevice(d_pool1, kBatch);
-    float* d_y1 = relu1.backwardDevice(d_y1a, kBatch);
-    float* d_x = conv1.backwardDevice(d_y1, kBatch);
-    must(cudaDeviceSynchronize(), "layer backward");
+    float* d_x = network.backwardDevice(device_grad_logits.get(), kBatch);
+    must(cudaDeviceSynchronize(), "network backward");
 
     bool ok = true;
-    ok = report("layer", "dHa", copy_floats(d_ha, kHiddenCount), grad_ha.raw()) && ok;
-    ok = report("layer", "dH", copy_floats(d_h, kHiddenCount), grad_h.raw()) && ok;
-    ok = report("layer", "dFlat", copy_floats(d_flat, kFlatCount), grad_flat.raw()) && ok;
-    ok = report("layer", "dY2a", copy_floats(d_y2a, kConv2Count), grad_y2a.raw()) && ok;
-    ok = report("layer", "dY2", copy_floats(d_y2, kConv2Count), grad_y2.raw()) && ok;
-    ok = report("layer", "dPool1", copy_floats(d_pool1, kPool1Count), grad_pool1.raw()) && ok;
-    ok = report("layer", "dY1a", copy_floats(d_y1a, kConv1Count), grad_y1a.raw()) && ok;
-    ok = report("layer", "dY1", copy_floats(d_y1, kConv1Count), grad_y1.raw()) && ok;
-    ok = report("layer", "dX", copy_floats(d_x, kBatch * 3 * 32 * 32), grad_x.raw()) && ok;
-    ok = report("layer", "dW1", conv1.gradients()[0]->raw(), cpu_w1) && ok;
-    ok = report("layer", "db1", conv1.gradients()[1]->raw(), cpu_b1) && ok;
-    ok = report("layer", "dW2", conv2.gradients()[0]->raw(), cpu_w2) && ok;
-    ok = report("layer", "db2", conv2.gradients()[1]->raw(), cpu_b2) && ok;
-    ok = report("layer", "dW3", dense1.gradients()[0]->raw(), cpu_w3) && ok;
-    ok = report("layer", "db3", dense1.gradients()[1]->raw(), cpu_b3) && ok;
-    ok = report("layer", "dW4", dense2.gradients()[0]->raw(), cpu_w4) && ok;
-    ok = report("layer", "db4", dense2.gradients()[1]->raw(), cpu_b4) && ok;
+    ok = report("network", "dX", copy_floats(d_x, kBatch * 3 * 32 * 32), grad_x.raw()) && ok;
+    ok = report("network", "dW1", conv1.gradients()[0]->raw(), cpu_w1) && ok;
+    ok = report("network", "db1", conv1.gradients()[1]->raw(), cpu_b1) && ok;
+    ok = report("network", "dW2", conv2.gradients()[0]->raw(), cpu_w2) && ok;
+    ok = report("network", "db2", conv2.gradients()[1]->raw(), cpu_b2) && ok;
+    ok = report("network", "dW3", dense1.gradients()[0]->raw(), cpu_w3) && ok;
+    ok = report("network", "db3", dense1.gradients()[1]->raw(), cpu_b3) && ok;
+    ok = report("network", "dW4", dense2.gradients()[0]->raw(), cpu_w4) && ok;
+    ok = report("network", "db4", dense2.gradients()[1]->raw(), cpu_b4) && ok;
 
     conv1.gradients()[0]->raw() = cpu_w1;
     conv1.gradients()[1]->raw() = cpu_b1;
@@ -939,16 +932,9 @@ int main(int argc, char** argv) {
     loss.forward(probabilities, targets);
     const Tensor grad_logits = softmax.backward(loss.backward());
 
-    const Tensor grad_ha = dense2.backward(grad_logits);
-    const Tensor grad_h = relu3.backward(dropout.backward(grad_ha));
-    const Tensor grad_flat = dense1.backward(grad_h);
-    const Tensor grad_pool2 = flatten.backward(grad_flat);
-    const Tensor grad_y2a = pool2.backward(grad_pool2);
-    const Tensor grad_y2 = relu2.backward(grad_y2a);
-    const Tensor grad_pool1 = conv2.backward(grad_y2);
-    const Tensor grad_y1a = pool1.backward(grad_pool1);
-    const Tensor grad_y1 = relu1.backward(grad_y1a);
-    const Tensor grad_x = conv1.backward(grad_y1);
+    const Tensor grad_flat = dense1.backward(relu3.backward(dropout.backward(dense2.backward(grad_logits))));
+    const Tensor grad_pool1 = conv2.backward(relu2.backward(pool2.backward(flatten.backward(grad_flat))));
+    const Tensor grad_x = conv1.backward(relu1.backward(pool1.backward(grad_pool1)));
     const std::vector<Tensor*> conv1_g = conv1.gradients();
     const std::vector<Tensor*> conv2_g = conv2.gradients();
     const std::vector<Tensor*> dense1_g = dense1.gradients();
@@ -1069,11 +1055,11 @@ int main(int argc, char** argv) {
     std::vector<float> cpu_b3 = dense1_g[1]->raw();
     std::vector<float> cpu_w4 = dense2_g[0]->raw();
     std::vector<float> cpu_b4 = dense2_g[1]->raw();
-    if (!layer_backward_matches(
-            conv1, relu1, pool1, conv2, relu2, pool2, dense1, relu3, dense2,
-            grad_logits, grad_ha, grad_h, grad_flat, grad_y2a, grad_y2, grad_pool1, grad_y1a, grad_y1, grad_x,
+    if (!network_backward_matches(
+            conv1, relu1, pool1, conv2, relu2, pool2, flatten, dense1, relu3, dropout, dense2, softmax,
+            grad_logits, grad_x,
             cpu_w1, cpu_b1, cpu_w2, cpu_b2, cpu_w3, cpu_b3, cpu_w4, cpu_b4)) {
-        std::cerr << "CUDA layer backward disagrees with the CPU stack by more than 1e-4 of the result size\n";
+        std::cerr << "CUDA network backward disagrees with the CPU stack by more than 1e-4 of the result size\n";
         return 1;
     }
 
@@ -1110,6 +1096,6 @@ int main(int argc, char** argv) {
     const std::string path = argc > 1 ? argv[1] : "results/bench_cuda.md";
     write_gemm_table(path, prop.name, rows);
     write_section(path, prop.name, resident_ms, transfer_ms);
-    std::cout << "CUDA eval matches the CPU logits, layer backward, gradients, one SGD step, and BatchNorm within 1e-4\n";
+    std::cout << "CUDA eval matches the CPU logits, network backward, gradients, one SGD step, and BatchNorm within 1e-4\n";
     return 0;
 }

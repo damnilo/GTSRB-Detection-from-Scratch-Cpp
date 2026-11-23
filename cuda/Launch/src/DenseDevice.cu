@@ -1,6 +1,6 @@
 #include "Layers/include/Dense.h"
-#include "cuda/include/DeviceMemory.cuh"
-#include "cuda/include/TensorOps.cuh"
+#include "cuda/Utils/include/DeviceMemory.cuh"
+#include "cuda/Utils/include/TensorOps.cuh"
 
 struct DenseDeviceState {
     float* output = nullptr;

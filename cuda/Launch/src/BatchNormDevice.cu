@@ -1,6 +1,6 @@
 #include "Layers/include/BatchNorm2D.h"
-#include "cuda/include/BatchNorm2D.cuh"
-#include "cuda/include/DeviceMemory.cuh"
+#include "cuda/Layers/include/BatchNorm2D.cuh"
+#include "cuda/Utils/include/DeviceMemory.cuh"
 
 struct BatchNormDevice {
     float* output = nullptr;
