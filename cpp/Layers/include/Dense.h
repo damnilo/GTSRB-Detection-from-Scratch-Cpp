@@ -30,4 +30,12 @@ public:
 
     std::vector<Tensor*> parameters() override;
     std::vector<Tensor*> gradients() override;
+
+    // Copies uploaded by the first device forward. The optimizer steps these in place.
+    float* deviceWeights();
+    float* deviceBias();
+    float* deviceGradWeights();
+    float* deviceGradBias();
+    // Backward reads the transpose. Rebuild it after the weights change.
+    void refreshDeviceTranspose();
 };

@@ -65,4 +65,10 @@ float* Dense::backwardDevice(const float* gradOutput, size_t batch) {
     (void)batch;
     throw std::runtime_error("CUDA was not built");
 }
+
+float* Dense::deviceWeights() { throw std::runtime_error("CUDA was not built"); }
+float* Dense::deviceBias() { throw std::runtime_error("CUDA was not built"); }
+float* Dense::deviceGradWeights() { throw std::runtime_error("CUDA was not built"); }
+float* Dense::deviceGradBias() { throw std::runtime_error("CUDA was not built"); }
+void Dense::refreshDeviceTranspose() { throw std::runtime_error("CUDA was not built"); }
 #endif

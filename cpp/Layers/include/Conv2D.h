@@ -57,4 +57,11 @@ public:
 
     void releaseDevice();
     float* deviceOutput() const;
+    // Copies uploaded by the first device forward. The optimizer steps these in place.
+    float* deviceWeights();
+    float* deviceBias();
+    float* deviceGradWeights();
+    float* deviceGradBias();
+    // Forward reads the transpose. Rebuild it after the weights change.
+    void refreshDeviceTranspose();
 };

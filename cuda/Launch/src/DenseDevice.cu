@@ -123,3 +123,30 @@ float* Dense::backwardDevice(const float* gradOutput, size_t batch) {
     mustCuda(cudaMemcpyAsync(gradBiases.raw().data(), state->gradBias, outputSize * sizeof(float), cudaMemcpyDeviceToHost));
     return state->gradInput;
 }
+
+static float* residentDense(void* device, float* DenseDeviceState::* member) {
+    auto* state = static_cast<DenseDeviceState*>(device);
+    if (state == nullptr || !state->weightsOnDevice) {
+        throw std::runtime_error("Dense device parameters are not on the device");
+    }
+    return state->*member;
+}
+
+float* Dense::deviceWeights() { return residentDense(device, &DenseDeviceState::weights); }
+float* Dense::deviceBias() { return residentDense(device, &DenseDeviceState::bias); }
+float* Dense::deviceGradWeights() { return residentDense(device, &DenseDeviceState::gradWeights); }
+float* Dense::deviceGradBias() { return residentDense(device, &DenseDeviceState::gradBias); }
+
+void Dense::refreshDeviceTranspose() {
+    auto* state = static_cast<DenseDeviceState*>(device);
+    if (state == nullptr || !state->weightsOnDevice) {
+        throw std::runtime_error("Dense device transpose requires a forward");
+    }
+    dim3 transposeBlock(16, 16);
+    dim3 transposeGrid(
+        static_cast<unsigned>((outputSize + transposeBlock.x - 1) / transposeBlock.x),
+        static_cast<unsigned>((inputSize + transposeBlock.y - 1) / transposeBlock.y)
+    );
+    cudaTranspose<<<transposeGrid, transposeBlock>>>(state->weights, state->weightsT, inputSize, outputSize);
+    mustCuda(cudaGetLastError());
+}

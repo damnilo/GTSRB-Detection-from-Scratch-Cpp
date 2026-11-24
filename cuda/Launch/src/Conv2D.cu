@@ -197,3 +197,25 @@ float* Conv2D::deviceOutput() const {
     auto* state = static_cast<ConvDevice*>(device);
     return state == nullptr ? nullptr : state->nchw;
 }
+
+static float* residentConv(void* device, float* ConvDevice::* member) {
+    auto* state = static_cast<ConvDevice*>(device);
+    if (state == nullptr || !state->weightsOnDevice) {
+        throw std::runtime_error("Conv2D device parameters are not on the device");
+    }
+    return state->*member;
+}
+
+float* Conv2D::deviceWeights() { return residentConv(device, &ConvDevice::weights); }
+float* Conv2D::deviceBias() { return residentConv(device, &ConvDevice::bias); }
+float* Conv2D::deviceGradWeights() { return residentConv(device, &ConvDevice::gradWeights); }
+float* Conv2D::deviceGradBias() { return residentConv(device, &ConvDevice::gradBias); }
+
+void Conv2D::refreshDeviceTranspose() {
+    auto* state = static_cast<ConvDevice*>(device);
+    if (state == nullptr || !state->weightsOnDevice) {
+        throw std::runtime_error("Conv2D device transpose requires a forward");
+    }
+    const size_t row = in_channels * kernel_size * kernel_size;
+    launchTranspose(state->weights, state->weightsT, out_channels, row);
+}
