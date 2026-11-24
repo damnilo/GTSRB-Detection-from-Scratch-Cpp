@@ -1,10 +1,17 @@
 #include "cpp_bench/train_images.h"
 
+#define STB_IMAGE_IMPLEMENTATION
+#define STBI_ONLY_PNG
+#define STBI_ONLY_JPEG
+#define STBI_ONLY_PNM
+#define STBI_ONLY_BMP
+#define STBI_NO_SIMD
+#include "third_party/stb_image.h"
+
 #include <algorithm>
 #include <cctype>
 #include <cmath>
 #include <filesystem>
-#include <fstream>
 #include <stdexcept>
 #include <string>
 
@@ -13,65 +20,21 @@ namespace {
 constexpr int kClasses = 43;
 constexpr int kSize = 32;
 
-void skip_space_and_comments(std::istream& in) {
-    while (in) {
-        const int next = in.peek();
-        if (next == EOF) {
-            return;
-        }
-        if (std::isspace(next)) {
-            in.get();
-            continue;
-        }
-        if (next == '#') {
-            std::string ignored;
-            std::getline(in, ignored);
-            continue;
-        }
-        return;
-    }
+bool image_extension(const std::string& extension) {
+    return extension == ".png" || extension == ".jpg" || extension == ".jpeg"
+        || extension == ".ppm" || extension == ".bmp";
 }
 
-int read_number(std::istream& in) {
-    skip_space_and_comments(in);
-    int value = 0;
-    if (!(in >> value)) {
-        throw std::runtime_error("PPM header is missing a number");
-    }
-    return value;
-}
-
-std::vector<unsigned char> read_ppm(const std::filesystem::path& path, int& width, int& height) {
-    std::ifstream in(path, std::ios::binary);
-    if (!in) {
-        throw std::runtime_error("Could not open " + path.string());
-    }
-    std::string magic;
-    in >> magic;
-    if (magic != "P6" && magic != "P3") {
-        throw std::runtime_error(path.string() + " is not a PPM image");
-    }
-    width = read_number(in);
-    height = read_number(in);
-    const int max_value = read_number(in);
-    if (width <= 0 || height <= 0 || max_value != 255) {
-        throw std::runtime_error(path.string() + " is not an 8-bit PPM image");
+std::vector<unsigned char> read_image(const std::filesystem::path& path, int& width, int& height) {
+    int channels = 0;
+    unsigned char* decoded = stbi_load(path.string().c_str(), &width, &height, &channels, 3);
+    if (decoded == nullptr) {
+        const char* reason = stbi_failure_reason();
+        throw std::runtime_error(path.string() + " could not be read" + (reason != nullptr ? std::string(": ") + reason : std::string()));
     }
     const size_t count = static_cast<size_t>(width) * static_cast<size_t>(height) * 3;
-    std::vector<unsigned char> rgb(count);
-    if (magic == "P6") {
-        if (in.peek() == '\n' || in.peek() == ' ' || in.peek() == '\r' || in.peek() == '\t') {
-            in.get();
-        }
-        in.read(reinterpret_cast<char*>(rgb.data()), static_cast<std::streamsize>(count));
-        if (in.gcount() != static_cast<std::streamsize>(count)) {
-            throw std::runtime_error(path.string() + " ended before the pixel data");
-        }
-        return rgb;
-    }
-    for (size_t i = 0; i < count; ++i) {
-        rgb[i] = static_cast<unsigned char>(read_number(in));
-    }
+    std::vector<unsigned char> rgb(decoded, decoded + count);
+    stbi_image_free(decoded);
     return rgb;
 }
 
@@ -197,18 +160,18 @@ TrainImages load_train_images(const std::string& train_root) {
         const fs::path directory = root / std::to_string(label);
         std::vector<fs::path> files;
         for (const fs::directory_entry& entry : fs::directory_iterator(directory)) {
-            if (entry.is_regular_file() && lower_extension(entry.path()) == ".ppm") {
+            if (entry.is_regular_file() && image_extension(lower_extension(entry.path()))) {
                 files.push_back(entry.path());
             }
         }
         std::sort(files.begin(), files.end());
         if (files.empty()) {
-            throw std::runtime_error(directory.string() + " has no PPM images");
+            throw std::runtime_error(directory.string() + " has no PNG, JPEG, or PPM images");
         }
         for (const fs::path& file : files) {
             int width = 0;
             int height = 0;
-            const std::vector<unsigned char> rgb = read_ppm(file, width, height);
+            const std::vector<unsigned char> rgb = read_image(file, width, height);
             store_resized(rgb, width, height, images.pixels);
             images.labels.push_back(label);
         }
