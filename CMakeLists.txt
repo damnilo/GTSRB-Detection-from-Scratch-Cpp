@@ -76,6 +76,7 @@ if(CMAKE_CUDA_COMPILER)
         cuda/Layers/src/MaxPool2D.cu
         cuda/Layers/src/Dropout.cu
         cuda/Optimizers/src/SGD.cu
+        cuda/Optimizers/src/SGDDevice.cu
         cuda/Launch/src/Conv2D.cu
         cuda/Launch/src/ReLUDevice.cu
         cuda/Launch/src/MaxPoolDevice.cu
