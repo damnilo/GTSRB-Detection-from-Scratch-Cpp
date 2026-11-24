@@ -50,6 +50,11 @@ float* BatchNorm2D::backwardDevice(const float* gradOutput, size_t batch) {
     (void)batch;
     throw std::runtime_error("CUDA was not built");
 }
+
+float* BatchNorm2D::deviceGamma() { throw std::runtime_error("CUDA was not built"); }
+float* BatchNorm2D::deviceBeta() { throw std::runtime_error("CUDA was not built"); }
+float* BatchNorm2D::deviceGradGamma() { throw std::runtime_error("CUDA was not built"); }
+float* BatchNorm2D::deviceGradBeta() { throw std::runtime_error("CUDA was not built"); }
 #endif
 
 // y = gamma * (x - mean) / sqrt(var + eps) + beta.

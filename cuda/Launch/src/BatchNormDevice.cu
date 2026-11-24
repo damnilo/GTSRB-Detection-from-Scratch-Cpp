@@ -127,3 +127,16 @@ float* BatchNorm2D::backwardDevice(const float* gradOutput, size_t batch) {
     mustCuda(cudaMemcpyAsync(gradBeta.raw().data(), state->gradBeta, parameterBytes, cudaMemcpyDeviceToHost));
     return state->gradInput;
 }
+
+static float* residentParameter(void* device, float* BatchNormDevice::* member) {
+    auto* state = static_cast<BatchNormDevice*>(device);
+    if (state == nullptr || !state->parametersOnDevice) {
+        throw std::runtime_error("BatchNorm2D device parameters are not on the device");
+    }
+    return state->*member;
+}
+
+float* BatchNorm2D::deviceGamma() { return residentParameter(device, &BatchNormDevice::gamma); }
+float* BatchNorm2D::deviceBeta() { return residentParameter(device, &BatchNormDevice::beta); }
+float* BatchNorm2D::deviceGradGamma() { return residentParameter(device, &BatchNormDevice::gradGamma); }
+float* BatchNorm2D::deviceGradBeta() { return residentParameter(device, &BatchNormDevice::gradBeta); }
