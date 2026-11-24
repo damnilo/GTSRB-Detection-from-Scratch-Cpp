@@ -10,6 +10,7 @@
 #include "Loss/include/CrossEntropy.h"
 #include "Optimizers/include/SGD.h"
 #include "cpp_bench/bench_cuda.h"
+#include "cuda/Optimizers/include/SGDDevice.cuh"
 #include "cuda/Optimizers/include/SGD.cuh"
 #include "cuda/Layers/include/MaxPool2D.cuh"
 #include "cuda/Layers/include/ReLU.cuh"
@@ -732,6 +733,7 @@ void write_section(const std::string& path, const std::string& gpu, float reside
     out << "BatchNorm2D train and eval, batch 64, matched the CPU layer within 1e-4 ";
     out << "for 16 channels at 32x32 and 32 channels at 16x16.\n";
     out << "Network::backwardDevice, from the logit gradient and stopping before SoftMax, matched the CPU stack within 1e-4.\n";
+    out << "One SGD step on BatchNorm gamma and beta, velocity zero and no clip, matched the CPU update within 1e-4.\n";
     std::cout << "Wrote " << path << "\n";
 }
 
@@ -793,6 +795,21 @@ bool batch_norm_matches(size_t channels, size_t height, size_t width) {
     ok = report(name, "eval", copy_floats(device_eval, input.size()), cpu_eval.raw()) && ok;
     ok = report(name, "eval running mean", layer.runningMeanBuffer()->raw(), trained_mean) && ok;
     ok = report(name, "eval running var", layer.runningVarBuffer()->raw(), trained_var) && ok;
+
+    grads[0]->raw() = cpu_gamma;
+    grads[1]->raw() = cpu_beta;
+    SGDDevice device_step(kLearningRate, kMomentum);
+    device_step.update(layer.deviceGamma(), layer.deviceGradGamma(), channels);
+    device_step.update(layer.deviceBeta(), layer.deviceGradBeta(), channels);
+    must(cudaDeviceSynchronize(), "batch norm sgd");
+    const std::vector<float> got_gamma = copy_floats(layer.deviceGamma(), channels);
+    const std::vector<float> got_beta = copy_floats(layer.deviceBeta(), channels);
+    SGD optimizer(kLearningRate, kMomentum);
+    std::vector<Tensor*> step_params = layer.parameters();
+    std::vector<Tensor*> step_grads = layer.gradients();
+    optimizer.update(step_params, step_grads);
+    ok = report(name, "sgd gamma", got_gamma, step_params[0]->raw()) && ok;
+    ok = report(name, "sgd beta", got_beta, step_params[1]->raw()) && ok;
     return ok;
 }
 
@@ -1096,6 +1113,6 @@ int main(int argc, char** argv) {
     const std::string path = argc > 1 ? argv[1] : "results/bench_cuda.md";
     write_gemm_table(path, prop.name, rows);
     write_section(path, prop.name, resident_ms, transfer_ms);
-    std::cout << "CUDA eval matches the CPU logits, network backward, gradients, one SGD step, and BatchNorm within 1e-4\n";
+    std::cout << "CUDA eval matches the CPU logits, network backward, gradients, one SGD step, BatchNorm, and the gamma/beta step within 1e-4\n";
     return 0;
 }
