@@ -10,6 +10,7 @@
 #include "Loss/include/CrossEntropy.h"
 #include "Optimizers/include/SGD.h"
 #include "cpp_bench/bench_cuda.h"
+#include "cpp_bench/train_images.h"
 #include "cuda/Optimizers/include/SGDDevice.cuh"
 
 #include <cublas_v2.h>
@@ -21,6 +22,7 @@
 #include <iomanip>
 #include <iostream>
 #include <iterator>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -67,6 +69,21 @@ std::vector<float> copy_floats(const float* device, size_t count) {
     return host;
 }
 
+void step_device_weights(SGDDevice& device_step, Conv2D& conv1, Conv2D& conv2, Dense& dense1, Dense& dense2) {
+    device_step.update(conv1.deviceWeights(), conv1.deviceGradWeights(), conv1.parameters()[0]->size());
+    device_step.update(conv1.deviceBias(), conv1.deviceGradBias(), conv1.parameters()[1]->size());
+    device_step.update(conv2.deviceWeights(), conv2.deviceGradWeights(), conv2.parameters()[0]->size());
+    device_step.update(conv2.deviceBias(), conv2.deviceGradBias(), conv2.parameters()[1]->size());
+    device_step.update(dense1.deviceWeights(), dense1.deviceGradWeights(), dense1.parameters()[0]->size());
+    device_step.update(dense1.deviceBias(), dense1.deviceGradBias(), dense1.parameters()[1]->size());
+    device_step.update(dense2.deviceWeights(), dense2.deviceGradWeights(), dense2.parameters()[0]->size());
+    device_step.update(dense2.deviceBias(), dense2.deviceGradBias(), dense2.parameters()[1]->size());
+    conv1.refreshDeviceTranspose();
+    conv2.refreshDeviceTranspose();
+    dense1.refreshDeviceTranspose();
+    dense2.refreshDeviceTranspose();
+}
+
 // One step on the copies the layers already keep. Velocity starts at zero.
 bool parameter_step_matches(
     Conv2D& conv1,
@@ -83,14 +100,7 @@ bool parameter_step_matches(
     const std::vector<Tensor*>& dense2_g
 ) {
     SGDDevice device_step(kLearningRate, kMomentum);
-    device_step.update(conv1.deviceWeights(), conv1.deviceGradWeights(), conv1_p[0]->size());
-    device_step.update(conv1.deviceBias(), conv1.deviceGradBias(), conv1_p[1]->size());
-    device_step.update(conv2.deviceWeights(), conv2.deviceGradWeights(), conv2_p[0]->size());
-    device_step.update(conv2.deviceBias(), conv2.deviceGradBias(), conv2_p[1]->size());
-    device_step.update(dense1.deviceWeights(), dense1.deviceGradWeights(), dense1_p[0]->size());
-    device_step.update(dense1.deviceBias(), dense1.deviceGradBias(), dense1_p[1]->size());
-    device_step.update(dense2.deviceWeights(), dense2.deviceGradWeights(), dense2_p[0]->size());
-    device_step.update(dense2.deviceBias(), dense2.deviceGradBias(), dense2_p[1]->size());
+    step_device_weights(device_step, conv1, conv2, dense1, dense2);
     must(cudaDeviceSynchronize(), "parameter sgd");
 
     const std::vector<float> got_w1 = copy_floats(conv1.deviceWeights(), conv1_p[0]->size());
@@ -101,12 +111,6 @@ bool parameter_step_matches(
     const std::vector<float> got_b3 = copy_floats(dense1.deviceBias(), dense1_p[1]->size());
     const std::vector<float> got_w4 = copy_floats(dense2.deviceWeights(), dense2_p[0]->size());
     const std::vector<float> got_b4 = copy_floats(dense2.deviceBias(), dense2_p[1]->size());
-
-    conv1.refreshDeviceTranspose();
-    conv2.refreshDeviceTranspose();
-    dense1.refreshDeviceTranspose();
-    dense2.refreshDeviceTranspose();
-    must(cudaDeviceSynchronize(), "weight transpose");
 
     std::vector<Tensor*> params = {
         conv1_p[0], conv1_p[1], conv2_p[0], conv2_p[1],
@@ -459,7 +463,13 @@ void write_gemm_table(const std::string& path, const std::string& gpu, const std
     }
 }
 
-void write_section(const std::string& path, const std::string& gpu, float resident_ms, float transfer_ms) {
+void write_section(
+    const std::string& path,
+    const std::string& gpu,
+    float resident_ms,
+    float transfer_ms,
+    const std::string& train_sentence
+) {
     const std::filesystem::path parent = std::filesystem::path(path).parent_path();
     if (!parent.empty()) {
         std::filesystem::create_directories(parent);
@@ -508,6 +518,9 @@ void write_section(const std::string& path, const std::string& gpu, float reside
     out << "One SGD step on BatchNorm gamma and beta, velocity zero and no clip, matched the CPU update within 1e-4.\n";
     out << "One SGD step on the model A weights and biases, velocity zero and no clip, matched the CPU update within 1e-4.\n";
     out << "Four training batches, with velocity kept across batches and no clip, matched the CPU epoch within 1e-4.\n";
+    if (!train_sentence.empty()) {
+        out << train_sentence << "\n";
+    }
     std::cout << "Wrote " << path << "\n";
 }
 
@@ -653,18 +666,7 @@ bool epoch_matches(
         device_grad.copy_from(grad_logits.raw());
         network.backwardDevice(device_grad.get(), kBatch);
 
-        device_step.update(conv1.deviceWeights(), conv1.deviceGradWeights(), conv1.parameters()[0]->size());
-        device_step.update(conv1.deviceBias(), conv1.deviceGradBias(), conv1.parameters()[1]->size());
-        device_step.update(conv2.deviceWeights(), conv2.deviceGradWeights(), conv2.parameters()[0]->size());
-        device_step.update(conv2.deviceBias(), conv2.deviceGradBias(), conv2.parameters()[1]->size());
-        device_step.update(dense1.deviceWeights(), dense1.deviceGradWeights(), dense1.parameters()[0]->size());
-        device_step.update(dense1.deviceBias(), dense1.deviceGradBias(), dense1.parameters()[1]->size());
-        device_step.update(dense2.deviceWeights(), dense2.deviceGradWeights(), dense2.parameters()[0]->size());
-        device_step.update(dense2.deviceBias(), dense2.deviceGradBias(), dense2.parameters()[1]->size());
-        conv1.refreshDeviceTranspose();
-        conv2.refreshDeviceTranspose();
-        dense1.refreshDeviceTranspose();
-        dense2.refreshDeviceTranspose();
+        step_device_weights(device_step, conv1, conv2, dense1, dense2);
         must(cudaDeviceSynchronize(), "epoch batch");
     }
 
@@ -751,6 +753,94 @@ bool network_backward_matches(
     dense2.gradients()[0]->raw() = cpu_w4;
     dense2.gradients()[1]->raw() = cpu_b4;
     return ok;
+}
+
+// A fresh model A. The four-batch check keeps its own weights. This walk does not
+// compare the result to the CPU stack.
+std::string one_train_epoch(const TrainImages& images) {
+    Tensor::seed(42);
+    Dropout::seed(42);
+
+    Conv2D conv1(3, kConv1Out, kKernel, kStride, kPadding);
+    ReLU relu1;
+    MaxPool2D pool1(2, 2);
+    Conv2D conv2(kConv1Out, kConv2Out, kKernel, kStride, kPadding);
+    ReLU relu2;
+    MaxPool2D pool2(2, 2);
+    Flatten flatten;
+    Dense dense1(kConv2Out * 8 * 8, kHidden);
+    ReLU relu3;
+    Dropout dropout(0.3f);
+    dropout.setTraining(false);
+    Dense dense2(kHidden, kClasses);
+    SoftMax softmax;
+
+    auto alias = [](Layer* layer) {
+        return std::shared_ptr<Layer>(layer, [](Layer*) {});
+    };
+    Network network;
+    network.addLayer(alias(&conv1));
+    network.addLayer(alias(&relu1));
+    network.addLayer(alias(&pool1));
+    network.addLayer(alias(&conv2));
+    network.addLayer(alias(&relu2));
+    network.addLayer(alias(&pool2));
+    network.addLayer(alias(&flatten));
+    network.addLayer(alias(&dense1));
+    network.addLayer(alias(&relu3));
+    network.addLayer(alias(&dropout));
+    network.addLayer(alias(&dense2));
+    network.addLayer(alias(&softmax));
+
+    SGDDevice device_step(kLearningRate, kMomentum);
+    DeviceBuffer<float> device_input(kBatch * 3 * 32 * 32);
+    DeviceBuffer<float> device_grad(kLogitCount);
+    constexpr size_t kImageFloats = 3 * 32 * 32;
+
+    double loss_sum = 0.0;
+    size_t batches = 0;
+    const auto started = std::chrono::steady_clock::now();
+    for (size_t start = 0; start < images.count; start += kBatch) {
+        const size_t count = std::min(kBatch, images.count - start);
+        Tensor input({count, 3, 32, 32});
+        std::copy(
+            images.pixels.begin() + static_cast<std::ptrdiff_t>(start * kImageFloats),
+            images.pixels.begin() + static_cast<std::ptrdiff_t>((start + count) * kImageFloats),
+            input.raw().begin()
+        );
+        Tensor targets({count, kClasses});
+        targets.fill(0.0f);
+        for (size_t i = 0; i < count; ++i) {
+            targets.at({i, static_cast<size_t>(images.labels[start + i])}) = 1.0f;
+        }
+
+        must(cudaMemcpy(device_input.get(), input.raw().data(), input.size() * sizeof(float), cudaMemcpyHostToDevice), "train HtoD");
+        float* logits = network.forwardDevice(device_input.get(), count, 3, 32, 32);
+        std::vector<float> logit_host(count * kClasses);
+        must(cudaMemcpy(logit_host.data(), logits, logit_host.size() * sizeof(float), cudaMemcpyDeviceToHost), "train DtoH");
+        Tensor logit_tensor({count, kClasses});
+        logit_tensor.raw() = std::move(logit_host);
+        CrossEntropy loss;
+        const Tensor probabilities = softmax.forward(logit_tensor);
+        const float batch_loss = loss.forward(probabilities, targets);
+        const Tensor grad_logits = softmax.backward(loss.backward());
+        must(cudaMemcpy(device_grad.get(), grad_logits.raw().data(), grad_logits.size() * sizeof(float), cudaMemcpyHostToDevice), "train grad");
+        network.backwardDevice(device_grad.get(), count);
+        step_device_weights(device_step, conv1, conv2, dense1, dense2);
+        must(cudaDeviceSynchronize(), "train batch");
+        loss_sum += static_cast<double>(batch_loss) * static_cast<double>(count);
+        ++batches;
+    }
+
+    const float seconds = std::chrono::duration<float>(std::chrono::steady_clock::now() - started).count();
+    const double mean_loss = loss_sum / static_cast<double>(images.count);
+    std::ostringstream sentence;
+    sentence << std::fixed << std::setprecision(4);
+    sentence << "One device epoch over dataset/Train, class order 0 to 42 with filenames sorted, ";
+    sentence << "dropout off, no augmentation and no clip, finished " << images.count;
+    sentence << " images in " << batches << " batches. Mean loss " << mean_loss << ". ";
+    sentence << std::setprecision(3) << seconds << " s.";
+    return sentence.str();
 }
 
 }  // namespace
@@ -927,11 +1017,21 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    std::string train_sentence;
+    const std::string train_root = "dataset/Train";
+    if (train_directory_ready(train_root)) {
+        const TrainImages train_images = load_train_images(train_root);
+        train_sentence = one_train_epoch(train_images);
+        std::cout << train_sentence << "\n";
+    } else {
+        std::cout << "dataset/Train is not in this directory, so the training-set epoch was not run.\n";
+    }
+
     cudaDeviceProp prop{};
     must(cudaGetDeviceProperties(&prop, 0), "cudaGetDeviceProperties");
     const std::string path = argc > 1 ? argv[1] : "results/bench_cuda.md";
     write_gemm_table(path, prop.name, rows);
-    write_section(path, prop.name, resident_ms, transfer_ms);
+    write_section(path, prop.name, resident_ms, transfer_ms, train_sentence);
     std::cout << "CUDA eval matches the CPU logits, network backward, the weight step, BatchNorm, the gamma/beta step, and four training batches within 1e-4\n";
     return 0;
 }

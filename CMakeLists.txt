@@ -70,6 +70,7 @@ if(CMAKE_CUDA_COMPILER)
 
     add_executable(bench_eval
         cpp_bench/bench_eval.cpp
+        cpp_bench/train_images.cpp
         cuda/Utils/src/TensorOps.cu
         cuda/Layers/src/Convolution.cu
         cuda/Layers/src/ReLU.cu
