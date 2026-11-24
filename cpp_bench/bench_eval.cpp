@@ -43,6 +43,7 @@ using cuda_bench::DeviceBuffer;
 constexpr size_t kBatch = 64;
 constexpr float kLearningRate = 0.015f;
 constexpr float kMomentum = 0.95f;
+constexpr float kClip = 5.0f;
 constexpr size_t kClasses = 43;
 constexpr size_t kHidden = 128;
 constexpr size_t kConv1Out = 16;
@@ -65,6 +66,45 @@ std::vector<float> copy_floats(const float* device, size_t count) {
     std::vector<float> host(count);
     must(cudaMemcpy(host.data(), device, count * sizeof(float), cudaMemcpyDeviceToHost), "cudaMemcpy DtoH");
     return host;
+}
+
+void copy_grad_to_device(const std::vector<float>& host, float* device) {
+    must(cudaMemcpy(device, host.data(), host.size() * sizeof(float), cudaMemcpyHostToDevice), "clip HtoD");
+}
+
+// Same rule as model.py: one scale for every parameter gradient when the global
+// L2 norm is above 5. The host copies are current only after a device sync.
+void clip_parameter_gradients(Conv2D& conv1, Conv2D& conv2, Dense& dense1, Dense& dense2) {
+    std::vector<Tensor*> grads = {
+        conv1.gradients()[0], conv1.gradients()[1],
+        conv2.gradients()[0], conv2.gradients()[1],
+        dense1.gradients()[0], dense1.gradients()[1],
+        dense2.gradients()[0], dense2.gradients()[1]
+    };
+    double square = 0.0;
+    for (Tensor* grad : grads) {
+        for (float value : grad->raw()) {
+            square += static_cast<double>(value) * static_cast<double>(value);
+        }
+    }
+    const double total = std::sqrt(square);
+    if (total <= static_cast<double>(kClip)) {
+        return;
+    }
+    const float scale = static_cast<float>(static_cast<double>(kClip) / (total + 1e-6));
+    for (Tensor* grad : grads) {
+        for (float& value : grad->raw()) {
+            value *= scale;
+        }
+    }
+    copy_grad_to_device(conv1.gradients()[0]->raw(), conv1.deviceGradWeights());
+    copy_grad_to_device(conv1.gradients()[1]->raw(), conv1.deviceGradBias());
+    copy_grad_to_device(conv2.gradients()[0]->raw(), conv2.deviceGradWeights());
+    copy_grad_to_device(conv2.gradients()[1]->raw(), conv2.deviceGradBias());
+    copy_grad_to_device(dense1.gradients()[0]->raw(), dense1.deviceGradWeights());
+    copy_grad_to_device(dense1.gradients()[1]->raw(), dense1.deviceGradBias());
+    copy_grad_to_device(dense2.gradients()[0]->raw(), dense2.deviceGradWeights());
+    copy_grad_to_device(dense2.gradients()[1]->raw(), dense2.deviceGradBias());
 }
 
 void step_device_weights(SGDDevice& device_step, Conv2D& conv1, Conv2D& conv2, Dense& dense1, Dense& dense2) {
@@ -824,6 +864,8 @@ std::string one_train_epoch(const TrainImages& images) {
         const Tensor grad_logits = softmax.backward(loss.backward());
         must(cudaMemcpy(device_grad.get(), grad_logits.raw().data(), grad_logits.size() * sizeof(float), cudaMemcpyHostToDevice), "train grad");
         network.backwardDevice(device_grad.get(), count);
+        must(cudaDeviceSynchronize(), "train backward");
+        clip_parameter_gradients(conv1, conv2, dense1, dense2);
         step_device_weights(device_step, conv1, conv2, dense1, dense2);
         must(cudaDeviceSynchronize(), "train batch");
         loss_sum += static_cast<double>(batch_loss) * static_cast<double>(count);
@@ -835,7 +877,7 @@ std::string one_train_epoch(const TrainImages& images) {
     std::ostringstream sentence;
     sentence << std::fixed << std::setprecision(4);
     sentence << "One device epoch over dataset/Train, class order 0 to 42 with filenames sorted, ";
-    sentence << "dropout off, no augmentation and no clip, finished " << images.count;
+    sentence << "dropout off, no augmentation, global gradient norm clipped at 5, finished " << images.count;
     sentence << " images in " << batches << " batches. Mean loss " << mean_loss << ". ";
     sentence << std::setprecision(3) << seconds << " s.";
     return sentence.str();
