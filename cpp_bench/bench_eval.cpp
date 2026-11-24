@@ -52,11 +52,9 @@ constexpr size_t kStride = 1;
 constexpr size_t kPadding = 1;
 
 constexpr size_t kConv1Spatial = kBatch * 32 * 32;
-constexpr size_t kConv1K = 3 * kKernel * kKernel;
 constexpr size_t kConv1Count = kConv1Spatial * kConv1Out;
 constexpr size_t kPool1Count = kBatch * kConv1Out * 16 * 16;
 constexpr size_t kConv2Spatial = kBatch * 16 * 16;
-constexpr size_t kConv2K = kConv1Out * kKernel * kKernel;
 constexpr size_t kConv2Count = kConv2Spatial * kConv2Out;
 constexpr size_t kFlatCount = kBatch * kConv2Out * 8 * 8;
 constexpr size_t kHiddenCount = kBatch * kHidden;
