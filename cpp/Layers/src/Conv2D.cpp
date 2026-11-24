@@ -221,4 +221,10 @@ float* Conv2D::backwardDevice(const float* gradOutput, size_t batch) {
     throw std::runtime_error("CUDA was not built");
 }
 
+float* Conv2D::deviceWeights() { throw std::runtime_error("CUDA was not built"); }
+float* Conv2D::deviceBias() { throw std::runtime_error("CUDA was not built"); }
+float* Conv2D::deviceGradWeights() { throw std::runtime_error("CUDA was not built"); }
+float* Conv2D::deviceGradBias() { throw std::runtime_error("CUDA was not built"); }
+void Conv2D::refreshDeviceTranspose() { throw std::runtime_error("CUDA was not built"); }
+
 #endif
