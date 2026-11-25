@@ -87,6 +87,7 @@ if(CMAKE_CUDA_COMPILER)
         cuda/Launch/src/DropoutDevice.cu
         cuda/Layers/src/BatchNorm2D.cu
         cuda/Launch/src/BatchNormDevice.cu
+        cuda/Launch/src/DeviceTrainer.cu
         cpp/Utils/src/Tensor.cpp
         cpp/Utils/src/Kernel.cpp
         cpp/Layers/src/Network.cpp
@@ -130,6 +131,7 @@ if(CMAKE_CUDA_COMPILER)
             cuda/Launch/src/DropoutDevice.cu
             cuda/Layers/src/BatchNorm2D.cu
             cuda/Launch/src/BatchNormDevice.cu
+            cuda/Launch/src/DeviceTrainer.cu
         )
         target_compile_definitions(cpp PRIVATE GTSRB_CUDA)
         target_include_directories(cpp PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

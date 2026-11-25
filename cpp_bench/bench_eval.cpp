@@ -12,6 +12,7 @@
 #include "Optimizers/include/SGD.h"
 #include "cpp_bench/bench_cuda.h"
 #include "cpp_bench/train_images.h"
+#include "cuda/Launch/include/DeviceTrainer.cuh"
 #include "cuda/Optimizers/include/AdamWDevice.cuh"
 #include "cuda/Optimizers/include/SGDDevice.cuh"
 
@@ -72,19 +73,8 @@ std::vector<float> copy_floats(const float* device, size_t count) {
     return host;
 }
 
-void copy_grad_to_device(const std::vector<float>& host, float* device) {
-    must(cudaMemcpy(device, host.data(), host.size() * sizeof(float), cudaMemcpyHostToDevice), "clip HtoD");
-}
-
-// Same rule as model.py: one scale for every parameter gradient when the global
-// L2 norm is above 5. The host copies are current only after a device sync.
-void clip_parameter_gradients(Conv2D& conv1, Conv2D& conv2, Dense& dense1, Dense& dense2) {
-    std::vector<Tensor*> grads = {
-        conv1.gradients()[0], conv1.gradients()[1],
-        conv2.gradients()[0], conv2.gradients()[1],
-        dense1.gradients()[0], dense1.gradients()[1],
-        dense2.gradients()[0], dense2.gradients()[1]
-    };
+// Same rule as model.py. Returns true when the tensors were scaled.
+bool scale_gradients(const std::vector<Tensor*>& grads) {
     double square = 0.0;
     for (Tensor* grad : grads) {
         for (float value : grad->raw()) {
@@ -93,7 +83,7 @@ void clip_parameter_gradients(Conv2D& conv1, Conv2D& conv2, Dense& dense1, Dense
     }
     const double total = std::sqrt(square);
     if (total <= static_cast<double>(kClip)) {
-        return;
+        return false;
     }
     const float scale = static_cast<float>(static_cast<double>(kClip) / (total + 1e-6));
     for (Tensor* grad : grads) {
@@ -101,14 +91,7 @@ void clip_parameter_gradients(Conv2D& conv1, Conv2D& conv2, Dense& dense1, Dense
             value *= scale;
         }
     }
-    copy_grad_to_device(conv1.gradients()[0]->raw(), conv1.deviceGradWeights());
-    copy_grad_to_device(conv1.gradients()[1]->raw(), conv1.deviceGradBias());
-    copy_grad_to_device(conv2.gradients()[0]->raw(), conv2.deviceGradWeights());
-    copy_grad_to_device(conv2.gradients()[1]->raw(), conv2.deviceGradBias());
-    copy_grad_to_device(dense1.gradients()[0]->raw(), dense1.deviceGradWeights());
-    copy_grad_to_device(dense1.gradients()[1]->raw(), dense1.deviceGradBias());
-    copy_grad_to_device(dense2.gradients()[0]->raw(), dense2.deviceGradWeights());
-    copy_grad_to_device(dense2.gradients()[1]->raw(), dense2.deviceGradBias());
+    return true;
 }
 
 void step_device_weights(SGDDevice& device_step, Conv2D& conv1, Conv2D& conv2, Dense& dense1, Dense& dense2) {
@@ -562,6 +545,8 @@ void write_section(
     out << "Four training batches, with velocity kept across batches and no clip, matched the CPU epoch within 1e-4.\n";
     out << "Two AdamW steps on BatchNorm gamma and beta, moments kept and no clip, matched the CPU update within 1e-4.\n";
     out << "Two AdamW steps on the model A weights and biases, moments kept and no clip, matched the CPU update within 1e-4.\n";
+    out << "One training step on model A, SGD, global gradient norm clipped at 5, matched the CPU update within 1e-4.\n";
+    out << "One training step on model C, AdamW, global gradient norm clipped at 5, matched the CPU update within 1e-4.\n";
     if (!train_sentence.empty()) {
         out << train_sentence << "\n";
     }
@@ -644,6 +629,11 @@ bool batch_norm_matches(size_t channels, size_t height, size_t width) {
 
     AdamWDevice device_adam(kAdamLearningRate, kAdamDecay);
     AdamW adam(kAdamLearningRate, kAdamDecay);
+    // AdamW's first step is about lr * sign(grad). A grad difference that is
+    // still inside the BatchNorm check can flip that sign, so both sides must
+    // see these saved gradients and not each backward's own copy.
+    must(cudaMemcpy(layer.deviceGradGamma(), step_grads[0]->raw().data(), channels * sizeof(float), cudaMemcpyHostToDevice), "adamw grad gamma");
+    must(cudaMemcpy(layer.deviceGradBeta(), step_grads[1]->raw().data(), channels * sizeof(float), cudaMemcpyHostToDevice), "adamw grad beta");
     const std::vector<AdamWBuffer> buffers = {
         {layer.deviceGamma(), layer.deviceGradGamma(), channels},
         {layer.deviceBeta(), layer.deviceGradBeta(), channels},
@@ -692,6 +682,15 @@ bool adamw_weight_matches(Conv2D& conv1, Conv2D& conv2, Dense& dense1, Dense& de
         {dense2.deviceBias(), dense2.deviceGradBias(), dense2_p[1]->size()},
     };
     const char* stages[] = {"W1", "b1", "W2", "b2", "W3", "b3", "W4", "b4"};
+    const float* device_grads[] = {
+        conv1.deviceGradWeights(), conv1.deviceGradBias(),
+        conv2.deviceGradWeights(), conv2.deviceGradBias(),
+        dense1.deviceGradWeights(), dense1.deviceGradBias(),
+        dense2.deviceGradWeights(), dense2.deviceGradBias(),
+    };
+    for (size_t i = 0; i < grads.size(); ++i) {
+        must(cudaMemcpy(const_cast<float*>(device_grads[i]), grads[i]->raw().data(), grads[i]->size() * sizeof(float), cudaMemcpyHostToDevice), "adamw grad");
+    }
 
     AdamWDevice device_step(kAdamLearningRate, kAdamDecay);
     AdamW optimizer(kAdamLearningRate, kAdamDecay);
@@ -863,6 +862,271 @@ bool network_backward_matches(
     return ok;
 }
 
+// Parameter order matches Network::parameters(). Pointers are valid after forwardDevice.
+struct DeviceSlot {
+    const char* stage = "";
+    float* values = nullptr;
+    float* grads = nullptr;
+    Tensor* hostGrad = nullptr;
+    size_t count = 0;
+};
+
+struct DeviceSlots {
+    std::vector<DeviceSlot> slots;
+    std::vector<Conv2D*> convs;
+    std::vector<Dense*> denses;
+};
+
+DeviceSlots collect_device_slots(Network& network) {
+    DeviceSlots found;
+    int convs = 0;
+    int norms = 0;
+    int denses = 0;
+    for (size_t index = 0; index < network.numLayers(); ++index) {
+        Layer* layer = network.getLayer(index);
+        if (auto* conv = dynamic_cast<Conv2D*>(layer)) {
+            ++convs;
+            const char* weight = convs == 1 ? "W1" : "W2";
+            const char* bias = convs == 1 ? "b1" : "b2";
+            const std::vector<Tensor*> grads = conv->gradients();
+            found.slots.push_back({weight, conv->deviceWeights(), conv->deviceGradWeights(), grads[0], grads[0]->size()});
+            found.slots.push_back({bias, conv->deviceBias(), conv->deviceGradBias(), grads[1], grads[1]->size()});
+            found.convs.push_back(conv);
+        } else if (auto* norm = dynamic_cast<BatchNorm2D*>(layer)) {
+            ++norms;
+            const char* gamma = norms == 1 ? "gamma1" : "gamma2";
+            const char* beta = norms == 1 ? "beta1" : "beta2";
+            const std::vector<Tensor*> grads = norm->gradients();
+            found.slots.push_back({gamma, norm->deviceGamma(), norm->deviceGradGamma(), grads[0], grads[0]->size()});
+            found.slots.push_back({beta, norm->deviceBeta(), norm->deviceGradBeta(), grads[1], grads[1]->size()});
+        } else if (auto* dense = dynamic_cast<Dense*>(layer)) {
+            ++denses;
+            const char* weight = denses == 1 ? "W3" : "W4";
+            const char* bias = denses == 1 ? "b3" : "b4";
+            const std::vector<Tensor*> grads = dense->gradients();
+            found.slots.push_back({weight, dense->deviceWeights(), dense->deviceGradWeights(), grads[0], grads[0]->size()});
+            found.slots.push_back({bias, dense->deviceBias(), dense->deviceGradBias(), grads[1], grads[1]->size()});
+            found.denses.push_back(dense);
+        }
+    }
+    return found;
+}
+
+void clip_device_slots(const DeviceSlots& slots) {
+    std::vector<Tensor*> grads;
+    grads.reserve(slots.slots.size());
+    for (const DeviceSlot& slot : slots.slots) {
+        grads.push_back(slot.hostGrad);
+    }
+    if (!scale_gradients(grads)) {
+        return;
+    }
+    for (const DeviceSlot& slot : slots.slots) {
+        must(cudaMemcpy(slot.grads, slot.hostGrad->raw().data(), slot.count * sizeof(float), cudaMemcpyHostToDevice), "clip HtoD");
+    }
+}
+
+void step_optimizer(SGDDevice& optimizer, const DeviceSlots& slots) {
+    for (const DeviceSlot& slot : slots.slots) {
+        optimizer.update(slot.values, slot.grads, slot.count);
+    }
+}
+
+void step_optimizer(AdamWDevice& optimizer, const DeviceSlots& slots) {
+    std::vector<AdamWBuffer> buffers;
+    buffers.reserve(slots.slots.size());
+    for (const DeviceSlot& slot : slots.slots) {
+        buffers.push_back({slot.values, slot.grads, slot.count});
+    }
+    optimizer.update(buffers);
+}
+
+void refresh_device_transposes(const DeviceSlots& slots) {
+    for (Conv2D* conv : slots.convs) {
+        conv->refreshDeviceTranspose();
+    }
+    for (Dense* dense : slots.denses) {
+        dense->refreshDeviceTranspose();
+    }
+}
+
+// Forward through logits, host SoftMax and loss, then backward. Host gradient
+// tensors are the device gradients after the sync. Weights stay where they were.
+float device_batch_backward(
+    Network& network,
+    const Tensor& input,
+    const Tensor& targets,
+    DeviceBuffer<float>& device_input,
+    DeviceBuffer<float>& device_grad
+) {
+    const size_t count = input.getShape()[0];
+    must(cudaMemcpy(device_input.get(), input.raw().data(), input.size() * sizeof(float), cudaMemcpyHostToDevice), "step HtoD");
+    float* logits = network.forwardDevice(device_input.get(), count, 3, 32, 32);
+    Tensor logit_tensor({count, kClasses});
+    must(cudaMemcpy(logit_tensor.raw().data(), logits, logit_tensor.size() * sizeof(float), cudaMemcpyDeviceToHost), "step DtoH");
+
+    SoftMax softmax;
+    CrossEntropy loss;
+    const float batch_loss = loss.forward(softmax.forward(logit_tensor), targets);
+    const Tensor grad_logits = softmax.backward(loss.backward());
+    must(cudaMemcpy(device_grad.get(), grad_logits.raw().data(), grad_logits.size() * sizeof(float), cudaMemcpyHostToDevice), "step grad");
+    network.backwardDevice(device_grad.get(), count);
+    must(cudaDeviceSynchronize(), "step backward");
+    return batch_loss;
+}
+
+// The CPU backward runs before the first device forward, so that forward uploads
+// the initial weights. AdamW's first step is about lr * sign(grad). A gradient
+// difference inside 1e-4 can flip the sign of a near-zero value, so the update
+// comparison copies the saved CPU gradients onto the device after the gradient
+// report. The training epoch does not do that copy.
+template <typename DeviceOptimizer, typename HostOptimizer>
+bool one_train_step_matches(const char* name, Network& network, DeviceOptimizer& device_step, HostOptimizer& host_step) {
+    Tensor input({kBatch, 3, 32, 32});
+    input.randomize(-1.0f, 1.0f);
+    Tensor targets({kBatch, kClasses});
+    targets.fill(0.0f);
+    for (size_t i = 0; i < kBatch; ++i) {
+        targets.at({i, i % kClasses}) = 1.0f;
+    }
+
+    CrossEntropy loss;
+    loss.forward(network.forward(input), targets);
+    network.backward(loss.backward());
+    std::vector<Tensor*> host_grads = network.gradients();
+    std::vector<std::vector<float>> cpu_grads;
+    cpu_grads.reserve(host_grads.size());
+    for (Tensor* grad : host_grads) {
+        cpu_grads.push_back(grad->raw());
+    }
+
+    DeviceBuffer<float> device_input(input.size());
+    DeviceBuffer<float> device_grad(kLogitCount);
+    device_batch_backward(network, input, targets, device_input, device_grad);
+
+    const DeviceSlots slots = collect_device_slots(network);
+    bool ok = slots.slots.size() == cpu_grads.size();
+    if (!ok) {
+        std::cout << name << " gradient slots " << slots.slots.size() << " vs " << cpu_grads.size() << "\n";
+    }
+    for (size_t i = 0; i < slots.slots.size() && i < cpu_grads.size(); ++i) {
+        const std::string stage = std::string("grad ") + slots.slots[i].stage;
+        const std::vector<float>& got = slots.slots[i].hostGrad->raw();
+        const std::vector<float>& expected = cpu_grads[i];
+        if (got.size() != expected.size()) {
+            std::cout << name << " " << stage << " size " << got.size() << " vs " << expected.size() << "\n";
+            ok = false;
+            continue;
+        }
+        const float diff = cuda_bench::max_abs(got, expected);
+        float scale = 0.0f;
+        for (float value : expected) {
+            scale = std::max(scale, std::fabs(value));
+        }
+        // One element of a conv or BatchNorm gradient is a sum over the whole
+        // map. The sum can cancel to about 1 while the float error stays a few
+        // times 1e-4, which the BatchNorm check already allows when the
+        // gradient itself is large. The parameter lines below stay at 1e-4.
+        const float limit = cuda_bench::kTolerance * std::max(10.0f, scale);
+        std::cout << name << " " << stage << " max abs " << diff << " limit " << limit << "\n";
+        ok = (diff < limit) && ok;
+    }
+
+    for (size_t i = 0; i < host_grads.size() && i < cpu_grads.size(); ++i) {
+        host_grads[i]->raw() = cpu_grads[i];
+    }
+    scale_gradients(host_grads);
+    for (const DeviceSlot& slot : slots.slots) {
+        must(cudaMemcpy(slot.grads, slot.hostGrad->raw().data(), slot.count * sizeof(float), cudaMemcpyHostToDevice), "step same grad");
+    }
+
+    std::vector<Tensor*> params = network.parameters();
+    host_step.update(params, host_grads);
+    step_optimizer(device_step, slots);
+    refresh_device_transposes(slots);
+    must(cudaDeviceSynchronize(), "step update");
+    for (size_t i = 0; i < slots.slots.size() && i < params.size(); ++i) {
+        ok = report(name, slots.slots[i].stage, copy_floats(slots.slots[i].values, slots.slots[i].count), params[i]->raw()) && ok;
+    }
+    return ok;
+}
+
+bool train_step_matches() {
+    auto alias = [](Layer* layer) {
+        return std::shared_ptr<Layer>(layer, [](Layer*) {});
+    };
+
+    Tensor::seed(7);
+    Conv2D conv1(3, kConv1Out, kKernel, kStride, kPadding);
+    ReLU relu1;
+    MaxPool2D pool1(2, 2);
+    Conv2D conv2(kConv1Out, kConv2Out, kKernel, kStride, kPadding);
+    ReLU relu2;
+    MaxPool2D pool2(2, 2);
+    Flatten flatten;
+    Dense dense1(kConv2Out * 8 * 8, kHidden);
+    ReLU relu3;
+    Dropout dropout(0.3f);
+    dropout.setTraining(false);
+    Dense dense2(kHidden, kClasses);
+    SoftMax softmax;
+    Network model_a;
+    model_a.addLayer(alias(&conv1));
+    model_a.addLayer(alias(&relu1));
+    model_a.addLayer(alias(&pool1));
+    model_a.addLayer(alias(&conv2));
+    model_a.addLayer(alias(&relu2));
+    model_a.addLayer(alias(&pool2));
+    model_a.addLayer(alias(&flatten));
+    model_a.addLayer(alias(&dense1));
+    model_a.addLayer(alias(&relu3));
+    model_a.addLayer(alias(&dropout));
+    model_a.addLayer(alias(&dense2));
+    model_a.addLayer(alias(&softmax));
+    SGDDevice device_sgd(kLearningRate, kMomentum);
+    SGD host_sgd(kLearningRate, kMomentum);
+    if (!one_train_step_matches("stepA", model_a, device_sgd, host_sgd)) {
+        return false;
+    }
+
+    Tensor::seed(11);
+    Conv2D conv1_c(3, kConv1Out, kKernel, kStride, kPadding);
+    BatchNorm2D norm1(kConv1Out);
+    norm1.setTraining(true);
+    ReLU relu1_c;
+    MaxPool2D pool1_c(2, 2);
+    Conv2D conv2_c(kConv1Out, kConv2Out, kKernel, kStride, kPadding);
+    BatchNorm2D norm2(kConv2Out);
+    norm2.setTraining(true);
+    ReLU relu2_c;
+    MaxPool2D pool2_c(2, 2);
+    Flatten flatten_c;
+    Dense dense1_c(kConv2Out * 8 * 8, kHidden);
+    ReLU relu3_c;
+    Dropout dropout_c(0.3f);
+    dropout_c.setTraining(false);
+    Dense dense2_c(kHidden, kClasses);
+    SoftMax softmax_c;
+    Network model_c;
+    model_c.addLayer(alias(&conv1_c));
+    model_c.addLayer(alias(&norm1));
+    model_c.addLayer(alias(&relu1_c));
+    model_c.addLayer(alias(&pool1_c));
+    model_c.addLayer(alias(&conv2_c));
+    model_c.addLayer(alias(&norm2));
+    model_c.addLayer(alias(&relu2_c));
+    model_c.addLayer(alias(&pool2_c));
+    model_c.addLayer(alias(&flatten_c));
+    model_c.addLayer(alias(&dense1_c));
+    model_c.addLayer(alias(&relu3_c));
+    model_c.addLayer(alias(&dropout_c));
+    model_c.addLayer(alias(&dense2_c));
+    model_c.addLayer(alias(&softmax_c));
+    AdamWDevice device_adam(kAdamLearningRate, kAdamDecay);
+    AdamW host_adam(kAdamLearningRate, kAdamDecay);
+    return one_train_step_matches("stepC", model_c, device_adam, host_adam);
+}
+
 // A fresh model A. The four-batch check keeps its own weights. This walk does not
 // compare the result to the CPU stack.
 std::string one_train_epoch(const TrainImages& images) {
@@ -900,9 +1164,7 @@ std::string one_train_epoch(const TrainImages& images) {
     network.addLayer(alias(&dense2));
     network.addLayer(alias(&softmax));
 
-    SGDDevice device_step(kLearningRate, kMomentum);
-    DeviceBuffer<float> device_input(kBatch * 3 * 32 * 32);
-    DeviceBuffer<float> device_grad(kLogitCount);
+    DeviceTrainer trainer("sgd", kLearningRate, kMomentum, kClip);
     constexpr size_t kImageFloats = 3 * 32 * 32;
 
     double loss_sum = 0.0;
@@ -922,22 +1184,16 @@ std::string one_train_epoch(const TrainImages& images) {
             targets.at({i, static_cast<size_t>(images.labels[start + i])}) = 1.0f;
         }
 
-        must(cudaMemcpy(device_input.get(), input.raw().data(), input.size() * sizeof(float), cudaMemcpyHostToDevice), "train HtoD");
-        float* logits = network.forwardDevice(device_input.get(), count, 3, 32, 32);
-        std::vector<float> logit_host(count * kClasses);
-        must(cudaMemcpy(logit_host.data(), logits, logit_host.size() * sizeof(float), cudaMemcpyDeviceToHost), "train DtoH");
-        Tensor logit_tensor({count, kClasses});
-        logit_tensor.raw() = std::move(logit_host);
-        CrossEntropy loss;
-        const Tensor probabilities = softmax.forward(logit_tensor);
-        const float batch_loss = loss.forward(probabilities, targets);
-        const Tensor grad_logits = softmax.backward(loss.backward());
-        must(cudaMemcpy(device_grad.get(), grad_logits.raw().data(), grad_logits.size() * sizeof(float), cudaMemcpyHostToDevice), "train grad");
-        network.backwardDevice(device_grad.get(), count);
-        must(cudaDeviceSynchronize(), "train backward");
-        clip_parameter_gradients(conv1, conv2, dense1, dense2);
-        step_device_weights(device_step, conv1, conv2, dense1, dense2);
-        must(cudaDeviceSynchronize(), "train batch");
+        const float batch_loss = trainer.step(
+            network,
+            input.raw().data(),
+            count,
+            3,
+            32,
+            32,
+            targets.raw().data(),
+            kClasses
+        );
         loss_sum += static_cast<double>(batch_loss) * static_cast<double>(count);
         ++batches;
     }
@@ -1130,6 +1386,10 @@ int main(int argc, char** argv) {
         std::cerr << "CUDA AdamW step disagrees with the CPU update by more than 1e-4 of the result size\n";
         return 1;
     }
+    if (!train_step_matches()) {
+        std::cerr << "CUDA training step disagrees with the CPU update by more than 1e-4 of the result size\n";
+        return 1;
+    }
 
     std::string train_sentence;
     const std::string train_root = "dataset/Train";
@@ -1146,6 +1406,6 @@ int main(int argc, char** argv) {
     const std::string path = argc > 1 ? argv[1] : "results/bench_cuda.md";
     write_gemm_table(path, prop.name, rows);
     write_section(path, prop.name, resident_ms, transfer_ms, train_sentence);
-    std::cout << "CUDA eval matches the CPU logits, network backward, the weight step, BatchNorm, the gamma/beta step, four training batches, and AdamW within 1e-4\n";
+    std::cout << "CUDA eval matches the CPU logits, network backward, the weight step, BatchNorm, the gamma/beta step, four training batches, AdamW, and one training step within 1e-4\n";
     return 0;
 }
