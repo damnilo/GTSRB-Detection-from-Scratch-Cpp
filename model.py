@@ -395,6 +395,16 @@ def train(seed=SEED, use_aug=True, use_bn=True, checkpoint_dir=None, optimizer_n
     return best_acc
 
 
+def predicted_labels(net, batch):
+    """Class index of each image. Device logits and host probabilities share the argmax."""
+    images = np.ascontiguousarray(batch, dtype=np.float32)
+    if cpp.cuda_available():
+        logits, _milliseconds = cpp.forward_device(net, images)
+        return np.argmax(np.asarray(logits), axis=1)
+    probabilities = tensor_to_numpy(net.forward(numpy_to_tensor(images)))
+    return np.argmax(probabilities, axis=1)
+
+
 def evaluate(net, X_val, y_val):
     """Computes classification accuracy of `net` on (X_val, y_val), batched to bound memory use."""
     correct = 0
@@ -405,14 +415,8 @@ def evaluate(net, X_val, y_val):
             print(f"Evaluating batch {i//batch_size + 1}/{len(X_val)//batch_size}")
         X_batch = X_val[i:i+batch_size]
         y_batch = y_val[i:i+batch_size]
-
-        X_tensor = numpy_to_tensor(X_batch)
-        predictions = tensor_to_numpy(net.forward(X_tensor))
-
-        labels_batch = np.argmax(predictions, axis=1)
-        batch_correct = np.sum(labels_batch == y_batch)
-
-        correct += batch_correct
+        labels_batch = predicted_labels(net, X_batch)
+        correct += np.sum(labels_batch == y_batch)
 
     return correct / len(X_val)
 
@@ -428,9 +432,8 @@ def evaluate_with_confusion(net, X_val, y_val, num_classes):
     for i in range(0, len(X_val), 64):
         X_batch = X_val[i:i+64]
         y_batch = y_val[i:i+64]
-        preds = np.argmax(tensor_to_numpy(net.forward(numpy_to_tensor(X_batch))), axis=1)
-        for t, p in zip(y_batch, preds):
-            confusion[t, p] += 1
+        for truth, guess in zip(y_batch, predicted_labels(net, X_batch)):
+            confusion[truth, guess] += 1
     return confusion
 
 

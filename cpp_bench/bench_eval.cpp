@@ -912,20 +912,6 @@ DeviceSlots collect_device_slots(Network& network) {
     return found;
 }
 
-void clip_device_slots(const DeviceSlots& slots) {
-    std::vector<Tensor*> grads;
-    grads.reserve(slots.slots.size());
-    for (const DeviceSlot& slot : slots.slots) {
-        grads.push_back(slot.hostGrad);
-    }
-    if (!scale_gradients(grads)) {
-        return;
-    }
-    for (const DeviceSlot& slot : slots.slots) {
-        must(cudaMemcpy(slot.grads, slot.hostGrad->raw().data(), slot.count * sizeof(float), cudaMemcpyHostToDevice), "clip HtoD");
-    }
-}
-
 void step_optimizer(SGDDevice& optimizer, const DeviceSlots& slots) {
     for (const DeviceSlot& slot : slots.slots) {
         optimizer.update(slot.values, slot.grads, slot.count);
