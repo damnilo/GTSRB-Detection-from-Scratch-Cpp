@@ -4,10 +4,11 @@ Variants share the training-set normalization protocol. Validation and test
 images are never augmented. The reported number for a variant is the mean
 across seeds, with the sample standard deviation.
 
-    python ablate.py
     python ablate.py D
     python ablate.py D 42
 
+This campaign writes checkpoints/<variant>/e20/seed<N>/ and results/ablation_e20.json.
+The 10-epoch checkpoints and results/ablation.json are left in place.
 A finished run is skipped when its metrics.json is already present.
 """
 
@@ -35,11 +36,11 @@ VARIANTS = {
 SEEDS = (42, 43, 44, 45, 46)
 SUMMARY_KEYS = ("accuracy", "macro_f1", "class_27_recall", "confusions_7_to_8")
 ROOT = Path(__file__).resolve().parent
-RESULTS_PATH = ROOT / "results" / "ablation.json"
+RESULTS_PATH = ROOT / "results" / "ablation_e20.json"
 
 
 def run_dir(variant, seed):
-    return CHECKPOINT_DIR / variant / f"seed{seed}"
+    return CHECKPOINT_DIR / variant / "e20" / f"seed{seed}"
 
 
 def evaluate_run(directory, use_bn):

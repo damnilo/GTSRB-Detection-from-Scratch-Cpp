@@ -1,0 +1,172 @@
+{
+  "runs": [
+    {
+      "accuracy": 0.9531274742676168,
+      "macro_f1": 0.9295139104668294,
+      "class_27_recall": 0.5,
+      "confusions_7_to_8": 75,
+      "variant": "D",
+      "seed": 42,
+      "use_aug": true,
+      "use_bn": true,
+      "optimizer_name": "sgd"
+    },
+    {
+      "accuracy": 0.9632620744259699,
+      "macro_f1": 0.951946475017393,
+      "class_27_recall": 0.8333333333333334,
+      "confusions_7_to_8": 56,
+      "variant": "D",
+      "seed": 43,
+      "use_aug": true,
+      "use_bn": true,
+      "optimizer_name": "sgd"
+    },
+    {
+      "accuracy": 0.9589073634204276,
+      "macro_f1": 0.9491126587970115,
+      "class_27_recall": 0.7666666666666667,
+      "confusions_7_to_8": 60,
+      "variant": "D",
+      "seed": 44,
+      "use_aug": true,
+      "use_bn": true,
+      "optimizer_name": "sgd"
+    },
+    {
+      "accuracy": 0.9552652414885194,
+      "macro_f1": 0.9399100286801646,
+      "class_27_recall": 0.5333333333333333,
+      "confusions_7_to_8": 79,
+      "variant": "D",
+      "seed": 45,
+      "use_aug": true,
+      "use_bn": true,
+      "optimizer_name": "sgd"
+    },
+    {
+      "accuracy": 0.9561361836896278,
+      "macro_f1": 0.9405895957145608,
+      "class_27_recall": 0.6666666666666666,
+      "confusions_7_to_8": 71,
+      "variant": "D",
+      "seed": 46,
+      "use_aug": true,
+      "use_bn": true,
+      "optimizer_name": "sgd"
+    },
+    {
+      "accuracy": 0.9352335708630245,
+      "macro_f1": 0.9203040499433047,
+      "class_27_recall": 0.45,
+      "confusions_7_to_8": 71,
+      "variant": "E",
+      "seed": 42,
+      "use_aug": true,
+      "use_bn": true,
+      "optimizer_name": "adamw"
+    },
+    {
+      "accuracy": 0.9110847189231988,
+      "macro_f1": 0.890881296221348,
+      "class_27_recall": 0.45,
+      "confusions_7_to_8": 86,
+      "variant": "E",
+      "seed": 43,
+      "use_aug": true,
+      "use_bn": true,
+      "optimizer_name": "adamw"
+    },
+    {
+      "accuracy": 0.9348376880443389,
+      "macro_f1": 0.9167273370168588,
+      "class_27_recall": 0.5166666666666667,
+      "confusions_7_to_8": 62,
+      "variant": "E",
+      "seed": 44,
+      "use_aug": true,
+      "use_bn": true,
+      "optimizer_name": "adamw"
+    },
+    {
+      "accuracy": 0.9311955661124307,
+      "macro_f1": 0.918883677475622,
+      "class_27_recall": 0.7666666666666667,
+      "confusions_7_to_8": 65,
+      "variant": "E",
+      "seed": 45,
+      "use_aug": true,
+      "use_bn": true,
+      "optimizer_name": "adamw"
+    },
+    {
+      "accuracy": 0.9259699129057799,
+      "macro_f1": 0.9060468281520214,
+      "class_27_recall": 0.6,
+      "confusions_7_to_8": 54,
+      "variant": "E",
+      "seed": 46,
+      "use_aug": true,
+      "use_bn": true,
+      "optimizer_name": "adamw"
+    }
+  ],
+  "summary": {
+    "D": {
+      "seeds": [
+        42,
+        43,
+        44,
+        45,
+        46
+      ],
+      "use_aug": true,
+      "use_bn": true,
+      "optimizer": "sgd",
+      "accuracy": {
+        "mean": 0.9573396674584324,
+        "std": 0.0039059813965753687
+      },
+      "macro_f1": {
+        "mean": 0.9422145337351919,
+        "std": 0.008825415132064944
+      },
+      "class_27_recall": {
+        "mean": 0.6599999999999999,
+        "std": 0.14414498873626438
+      },
+      "confusions_7_to_8": {
+        "mean": 68.2,
+        "std": 9.833615815151616
+      }
+    },
+    "E": {
+      "seeds": [
+        42,
+        43,
+        44,
+        45,
+        46
+      ],
+      "use_aug": true,
+      "use_bn": true,
+      "optimizer": "adamw",
+      "accuracy": {
+        "mean": 0.9276642913697545,
+        "std": 0.009987174952109957
+      },
+      "macro_f1": {
+        "mean": 0.9105686377618311,
+        "std": 0.012347933950442699
+      },
+      "class_27_recall": {
+        "mean": 0.5566666666666668,
+        "std": 0.1326021618727739
+      },
+      "confusions_7_to_8": {
+        "mean": 67.6,
+        "std": 11.970797801316335
+      }
+    }
+  }
+}

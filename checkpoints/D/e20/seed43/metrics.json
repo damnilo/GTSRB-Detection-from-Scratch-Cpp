@@ -1,0 +1,11 @@
+{
+  "accuracy": 0.9632620744259699,
+  "macro_f1": 0.951946475017393,
+  "class_27_recall": 0.8333333333333334,
+  "confusions_7_to_8": 56,
+  "variant": "D",
+  "seed": 43,
+  "use_aug": true,
+  "use_bn": true,
+  "optimizer_name": "sgd"
+}

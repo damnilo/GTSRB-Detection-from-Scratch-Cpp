@@ -8,9 +8,11 @@
 #include "Layers/include/ReLU.h"
 #include "Layers/include/SoftMax.h"
 #include "Loss/include/CrossEntropy.h"
+#include "Optimizers/include/AdamW.h"
 #include "Optimizers/include/SGD.h"
 #include "cpp_bench/bench_cuda.h"
 #include "cpp_bench/train_images.h"
+#include "cuda/Optimizers/include/AdamWDevice.cuh"
 #include "cuda/Optimizers/include/SGDDevice.cuh"
 
 #include <cublas_v2.h>
@@ -43,6 +45,8 @@ using cuda_bench::DeviceBuffer;
 constexpr size_t kBatch = 64;
 constexpr float kLearningRate = 0.015f;
 constexpr float kMomentum = 0.95f;
+constexpr float kAdamLearningRate = 1e-3f;
+constexpr float kAdamDecay = 1e-2f;
 constexpr float kClip = 5.0f;
 constexpr size_t kClasses = 43;
 constexpr size_t kHidden = 128;
@@ -556,6 +560,8 @@ void write_section(
     out << "One SGD step on BatchNorm gamma and beta, velocity zero and no clip, matched the CPU update within 1e-4.\n";
     out << "One SGD step on the model A weights and biases, velocity zero and no clip, matched the CPU update within 1e-4.\n";
     out << "Four training batches, with velocity kept across batches and no clip, matched the CPU epoch within 1e-4.\n";
+    out << "Two AdamW steps on BatchNorm gamma and beta, moments kept and no clip, matched the CPU update within 1e-4.\n";
+    out << "Two AdamW steps on the model A weights and biases, moments kept and no clip, matched the CPU update within 1e-4.\n";
     if (!train_sentence.empty()) {
         out << train_sentence << "\n";
     }
@@ -635,6 +641,70 @@ bool batch_norm_matches(size_t channels, size_t height, size_t width) {
     optimizer.update(step_params, step_grads);
     ok = report(name, "sgd gamma", got_gamma, step_params[0]->raw()) && ok;
     ok = report(name, "sgd beta", got_beta, step_params[1]->raw()) && ok;
+
+    AdamWDevice device_adam(kAdamLearningRate, kAdamDecay);
+    AdamW adam(kAdamLearningRate, kAdamDecay);
+    const std::vector<AdamWBuffer> buffers = {
+        {layer.deviceGamma(), layer.deviceGradGamma(), channels},
+        {layer.deviceBeta(), layer.deviceGradBeta(), channels},
+    };
+    for (int step = 0; step < 2; ++step) {
+        device_adam.update(buffers);
+        must(cudaDeviceSynchronize(), "batch norm adamw");
+        const std::vector<float> adam_gamma = copy_floats(layer.deviceGamma(), channels);
+        const std::vector<float> adam_beta = copy_floats(layer.deviceBeta(), channels);
+        adam.update(step_params, step_grads);
+        const char* gamma_stage = step == 0 ? "adamw gamma" : "adamw2 gamma";
+        const char* beta_stage = step == 0 ? "adamw beta" : "adamw2 beta";
+        ok = report(name, gamma_stage, adam_gamma, step_params[0]->raw()) && ok;
+        ok = report(name, beta_stage, adam_beta, step_params[1]->raw()) && ok;
+    }
+    return ok;
+}
+
+// Two steps so the second one uses the moments from the first. No clip.
+bool adamw_weight_matches(Conv2D& conv1, Conv2D& conv2, Dense& dense1, Dense& dense2) {
+    const std::vector<Tensor*> conv1_p = conv1.parameters();
+    const std::vector<Tensor*> conv2_p = conv2.parameters();
+    const std::vector<Tensor*> dense1_p = dense1.parameters();
+    const std::vector<Tensor*> dense2_p = dense2.parameters();
+    const std::vector<Tensor*> conv1_g = conv1.gradients();
+    const std::vector<Tensor*> conv2_g = conv2.gradients();
+    const std::vector<Tensor*> dense1_g = dense1.gradients();
+    const std::vector<Tensor*> dense2_g = dense2.gradients();
+
+    std::vector<Tensor*> params = {
+        conv1_p[0], conv1_p[1], conv2_p[0], conv2_p[1],
+        dense1_p[0], dense1_p[1], dense2_p[0], dense2_p[1]
+    };
+    std::vector<Tensor*> grads = {
+        conv1_g[0], conv1_g[1], conv2_g[0], conv2_g[1],
+        dense1_g[0], dense1_g[1], dense2_g[0], dense2_g[1]
+    };
+    const std::vector<AdamWBuffer> buffers = {
+        {conv1.deviceWeights(), conv1.deviceGradWeights(), conv1_p[0]->size()},
+        {conv1.deviceBias(), conv1.deviceGradBias(), conv1_p[1]->size()},
+        {conv2.deviceWeights(), conv2.deviceGradWeights(), conv2_p[0]->size()},
+        {conv2.deviceBias(), conv2.deviceGradBias(), conv2_p[1]->size()},
+        {dense1.deviceWeights(), dense1.deviceGradWeights(), dense1_p[0]->size()},
+        {dense1.deviceBias(), dense1.deviceGradBias(), dense1_p[1]->size()},
+        {dense2.deviceWeights(), dense2.deviceGradWeights(), dense2_p[0]->size()},
+        {dense2.deviceBias(), dense2.deviceGradBias(), dense2_p[1]->size()},
+    };
+    const char* stages[] = {"W1", "b1", "W2", "b2", "W3", "b3", "W4", "b4"};
+
+    AdamWDevice device_step(kAdamLearningRate, kAdamDecay);
+    AdamW optimizer(kAdamLearningRate, kAdamDecay);
+    bool ok = true;
+    for (int step = 0; step < 2; ++step) {
+        device_step.update(buffers);
+        must(cudaDeviceSynchronize(), "adamw weights");
+        optimizer.update(params, grads);
+        const char* name = step == 0 ? "adamw" : "adamw2";
+        for (size_t i = 0; i < buffers.size(); ++i) {
+            ok = report(name, stages[i], copy_floats(buffers[i].params, buffers[i].count), params[i]->raw()) && ok;
+        }
+    }
     return ok;
 }
 
@@ -1056,6 +1126,10 @@ int main(int argc, char** argv) {
         std::cerr << "CUDA epoch disagrees with the CPU epoch by more than 1e-4 of the result size\n";
         return 1;
     }
+    if (!adamw_weight_matches(conv1, conv2, dense1, dense2)) {
+        std::cerr << "CUDA AdamW step disagrees with the CPU update by more than 1e-4 of the result size\n";
+        return 1;
+    }
 
     std::string train_sentence;
     const std::string train_root = "dataset/Train";
@@ -1072,6 +1146,6 @@ int main(int argc, char** argv) {
     const std::string path = argc > 1 ? argv[1] : "results/bench_cuda.md";
     write_gemm_table(path, prop.name, rows);
     write_section(path, prop.name, resident_ms, transfer_ms, train_sentence);
-    std::cout << "CUDA eval matches the CPU logits, network backward, the weight step, BatchNorm, the gamma/beta step, and four training batches within 1e-4\n";
+    std::cout << "CUDA eval matches the CPU logits, network backward, the weight step, BatchNorm, the gamma/beta step, four training batches, and AdamW within 1e-4\n";
     return 0;
 }
