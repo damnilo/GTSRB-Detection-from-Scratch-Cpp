@@ -1,0 +1,11 @@
+{
+  "accuracy": 0.9259699129057799,
+  "macro_f1": 0.9060468281520214,
+  "class_27_recall": 0.6,
+  "confusions_7_to_8": 54,
+  "variant": "E",
+  "seed": 46,
+  "use_aug": true,
+  "use_bn": true,
+  "optimizer_name": "adamw"
+}
