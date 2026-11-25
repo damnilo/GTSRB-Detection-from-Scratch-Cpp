@@ -1,0 +1,16 @@
+{
+  "test_images": 12630,
+  "correct_predictions": 12064,
+  "accuracy": 0.9551860649247823,
+  "macro_precision": 0.9450421015240428,
+  "macro_recall": 0.9354753281770471,
+  "macro_f1": 0.937366040294293,
+  "weighted_precision": 0.9557546617496167,
+  "weighted_recall": 0.9551860649247823,
+  "weighted_f1": 0.9545752052205949,
+  "protocol": "training-set per-channel mean/std",
+  "device": "cuda",
+  "checkpoint": "checkpoints/A/device_e10",
+  "milliseconds": 476.60028862953186,
+  "images_per_second": 26500.193771006037
+}
