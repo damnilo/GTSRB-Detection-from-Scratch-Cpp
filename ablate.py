@@ -4,11 +4,13 @@ Variants share the training-set normalization protocol. Validation and test
 images are never augmented. The reported number for a variant is the mean
 across seeds, with the sample standard deviation.
 
-    python ablate.py D
-    python ablate.py D 42
+    python ablate.py C 42
+    python ablate.py C 42 20
 
-This campaign writes checkpoints/<variant>/e20/seed<N>/ and results/ablation_e20.json.
-The 10-epoch checkpoints and results/ablation.json are left in place.
+Without a third number the run uses model.py's epoch count and writes
+checkpoints/<variant>/seed<N>/ plus results/ablation.json.
+The third number is the epoch count. It writes
+checkpoints/<variant>/e<epochs>/seed<N>/ and results/ablation_e<epochs>.json.
 A finished run is skipped when its metrics.json is already present.
 """
 
@@ -36,11 +38,16 @@ VARIANTS = {
 SEEDS = (42, 43, 44, 45, 46)
 SUMMARY_KEYS = ("accuracy", "macro_f1", "class_27_recall", "confusions_7_to_8")
 ROOT = Path(__file__).resolve().parent
-RESULTS_PATH = ROOT / "results" / "ablation_e20.json"
+def run_dir(variant, seed, epochs):
+    folder = CHECKPOINT_DIR / variant
+    if epochs is not None:
+        folder = folder / f"e{epochs}"
+    return folder / f"seed{seed}"
 
 
-def run_dir(variant, seed):
-    return CHECKPOINT_DIR / variant / "e20" / f"seed{seed}"
+def results_path(epochs):
+    name = "ablation.json" if epochs is None else f"ablation_e{epochs}.json"
+    return ROOT / "results" / name
 
 
 def evaluate_run(directory, use_bn):
@@ -106,11 +113,11 @@ def print_summary(summary):
         )
 
 
-def merge_runs(runs):
+def merge_runs(runs, path):
     """Keep metrics from other invocations, and replace rows this invocation produced."""
     existing = []
-    if RESULTS_PATH.is_file():
-        existing = json.loads(RESULTS_PATH.read_text(encoding="utf-8")).get("runs", [])
+    if path.is_file():
+        existing = json.loads(path.read_text(encoding="utf-8")).get("runs", [])
     by_key = {(row["variant"], row["seed"]): row for row in existing}
     for row in runs:
         by_key[(row["variant"], row["seed"])] = row
@@ -121,6 +128,9 @@ def merge_runs(runs):
 def selected_runs(argv):
     variants = list(VARIANTS)
     seeds = list(SEEDS)
+    epochs = None
+    if len(argv) > 4:
+        raise SystemExit("Usage: python ablate.py [variant] [seed] [epochs]")
     if len(argv) >= 2:
         variant = argv[1].upper()
         if variant not in VARIANTS:
@@ -128,13 +138,19 @@ def selected_runs(argv):
         variants = [variant]
     if len(argv) >= 3:
         seeds = [int(argv[2])]
-    return [(variant, seed) for variant in variants for seed in seeds]
+    if len(argv) == 4:
+        epochs = int(argv[3])
+        if epochs < 1:
+            raise SystemExit("Epoch count must be at least 1.")
+    return [(variant, seed) for variant in variants for seed in seeds], epochs
 
 
 def main():
+    pairs, epochs = selected_runs(sys.argv)
+    path = results_path(epochs)
     runs = []
-    for variant, seed in selected_runs(sys.argv):
-        directory = run_dir(variant, seed)
+    for variant, seed in pairs:
+        directory = run_dir(variant, seed, epochs)
         metrics_path = directory / "metrics.json"
         flags = VARIANTS[variant]
         if metrics_path.is_file():
@@ -143,11 +159,17 @@ def main():
         else:
             print(
                 f"Training {variant} seed {seed}: aug={flags['use_aug']} "
-                f"bn={flags['use_bn']} optimizer={flags['optimizer_name']}"
+                f"bn={flags['use_bn']} optimizer={flags['optimizer_name']} "
+                f"epochs={epochs if epochs is not None else 'default'}"
             )
-            train(seed=seed, checkpoint_dir=directory, **flags)
+            train_flags = dict(flags)
+            if epochs is not None:
+                train_flags["epochs"] = epochs
+            train(seed=seed, checkpoint_dir=directory, **train_flags)
             metrics = evaluate_run(directory, flags["use_bn"])
             metrics.update({"variant": variant, "seed": seed, **flags})
+            if epochs is not None:
+                metrics["epochs"] = epochs
             directory.mkdir(parents=True, exist_ok=True)
             metrics_path.write_text(json.dumps(metrics, indent=2) + "\n", encoding="utf-8")
             print(
@@ -160,13 +182,13 @@ def main():
         metrics.setdefault("seed", seed)
         runs.append(metrics)
 
-    combined = merge_runs(runs)
+    combined = merge_runs(runs, path)
     summary = summarize(combined)
-    RESULTS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    path.parent.mkdir(parents=True, exist_ok=True)
     payload = {"runs": combined, "summary": summary}
-    RESULTS_PATH.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
     print_summary(summary)
-    print(f"Wrote {RESULTS_PATH}")
+    print(f"Wrote {path}")
 
 
 if __name__ == "__main__":
