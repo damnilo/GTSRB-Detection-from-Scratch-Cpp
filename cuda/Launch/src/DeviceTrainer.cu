@@ -96,10 +96,10 @@ void clip_slots(const TrainSlots& slots, float clip) {
     }
 }
 
-void step_slots(State& state, const TrainSlots& slots) {
-    if (state.sgd) {
+void step_slots(SGDDevice* sgd, AdamWDevice* adam, const TrainSlots& slots) {
+    if (sgd != nullptr) {
         for (const TrainSlot& slot : slots.slots) {
-            state.sgd->update(slot.values, slot.grads, slot.hostGrad->size());
+            sgd->update(slot.values, slot.grads, slot.hostGrad->size());
         }
         return;
     }
@@ -108,7 +108,7 @@ void step_slots(State& state, const TrainSlots& slots) {
     for (const TrainSlot& slot : slots.slots) {
         buffers.push_back({slot.values, slot.grads, slot.hostGrad->size()});
     }
-    state.adam->update(buffers);
+    adam->update(buffers);
 }
 
 void refresh_transposes(const TrainSlots& slots) {
@@ -185,7 +185,7 @@ float DeviceTrainer::step(
 
     const TrainSlots slots = collect_slots(network);
     clip_slots(slots, state->clip);
-    step_slots(*state, slots);
+    step_slots(state->sgd.get(), state->adam.get(), slots);
     refresh_transposes(slots);
     mustCuda(cudaDeviceSynchronize());
     return batchLoss;

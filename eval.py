@@ -229,17 +229,14 @@ def main():
 
     if args.checkpoint is None:
         if args.device == "cuda":
-            raise SystemExit("CUDA eval needs --checkpoint, and that checkpoint must not use BatchNorm.")
+            raise SystemExit("CUDA eval needs --checkpoint.")
         evaluate_default()
         return
 
     seed_everything(SEED)
     net, mean, std, use_bn = load_checkpoint(args.checkpoint)
-    if args.device == "cuda":
-        if use_bn:
-            raise SystemExit("CUDA eval is model A only. This checkpoint uses BatchNorm.")
-        if not cpp.cuda_available():
-            raise SystemExit("This build has no CUDA. Configure with nvcc and rebuild the cpp module.")
+    if args.device == "cuda" and not cpp.cuda_available():
+        raise SystemExit("This build has no CUDA. Configure with nvcc and rebuild the cpp module.")
 
     images, labels = load_test_data()
     images = standardize(images, mean, std)
@@ -257,7 +254,7 @@ def main():
     confusion, total_ms = confusion_on_device(net, images, labels)
     scores = scores_from_confusion(confusion)
     images_per_second = scores["test_images"] / (total_ms / 1000.0)
-    path = RESULTS_DIR / "test_metrics_cuda.json"
+    path = RESULTS_DIR / ("test_metrics_cuda_bn.json" if use_bn else "test_metrics_cuda.json")
     write_metrics(path, scores, {
         "device": "cuda",
         "checkpoint": str(args.checkpoint),
