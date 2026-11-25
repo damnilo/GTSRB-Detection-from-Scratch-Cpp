@@ -22,6 +22,7 @@
 
 #ifdef GTSRB_CUDA
 #include <cuda_runtime.h>
+#include "cuda/Launch/include/DeviceTrainer.cuh"
 #endif
 
 #include <stdexcept>
@@ -267,4 +268,40 @@ PYBIND11_MODULE(cpp, m) {
         .def("isTraining", &BatchNorm2D::isTraining)
         .def("runningMean", &BatchNorm2D::runningMeanBuffer, py::return_value_policy::reference)
         .def("runningVar", &BatchNorm2D::runningVarBuffer, py::return_value_policy::reference);
+
+#ifdef GTSRB_CUDA
+    py::class_<DeviceTrainer>(m, "DeviceTrainer")
+        .def(py::init<const std::string&, float, float, float>(),
+             py::arg("optimizer"),
+             py::arg("learning_rate"),
+             py::arg("second"),
+             py::arg("clip"))
+        .def("step", [](DeviceTrainer& trainer, Network& network,
+                        py::array_t<float, py::array::c_style | py::array::forcecast> images,
+                        py::array_t<float, py::array::c_style | py::array::forcecast> targets) {
+            const py::buffer_info imageInfo = images.request();
+            const py::buffer_info targetInfo = targets.request();
+            if (imageInfo.ndim != 4 || imageInfo.shape[1] != 3 || imageInfo.shape[2] != 32 || imageInfo.shape[3] != 32) {
+                throw std::runtime_error("DeviceTrainer.step expects images of shape (N, 3, 32, 32)");
+            }
+            if (targetInfo.ndim != 2 || targetInfo.shape[0] != imageInfo.shape[0] || targetInfo.shape[1] < 1) {
+                throw std::runtime_error("DeviceTrainer.step expects targets of shape (N, classes)");
+            }
+            const auto batch = static_cast<size_t>(imageInfo.shape[0]);
+            const auto classes = static_cast<size_t>(targetInfo.shape[1]);
+            return trainer.step(
+                network,
+                static_cast<const float*>(imageInfo.ptr),
+                batch,
+                3,
+                32,
+                32,
+                static_cast<const float*>(targetInfo.ptr),
+                classes
+            );
+        }, py::arg("network"), py::arg("images"), py::arg("targets"))
+        .def("setLearningRate", &DeviceTrainer::setLearningRate)
+        .def("getLearningRate", &DeviceTrainer::getLearningRate)
+        .def("copyParametersToHost", &DeviceTrainer::copyParametersToHost);
+#endif
 }

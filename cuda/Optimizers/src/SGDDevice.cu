@@ -13,6 +13,10 @@ SGDDevice::~SGDDevice() {
     }
 }
 
+void SGDDevice::setLearningRate(float newLearningRate) {
+    learningRate = newLearningRate;
+}
+
 void SGDDevice::update(float* params, const float* grads, size_t count) {
     auto found = velocity.find(params);
     if (found == velocity.end()) {

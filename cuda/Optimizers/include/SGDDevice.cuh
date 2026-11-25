@@ -23,4 +23,6 @@ public:
     SGDDevice& operator=(const SGDDevice&) = delete;
 
     void update(float* params, const float* grads, size_t count);
+    // Velocity stays. The next update uses this rate.
+    void setLearningRate(float newLearningRate);
 };

@@ -76,7 +76,7 @@ def save_norm(mean, std, path=NORM_PATH):
     np.savez(str(path), mean=np.asarray(mean, dtype=np.float32), std=np.asarray(std, dtype=np.float32))
 
 
-def save_config(directory=CHECKPOINT_DIR, seed=SEED, use_aug=True, use_bn=True, optimizer_name="sgd"):
+def save_config(directory=CHECKPOINT_DIR, seed=SEED, use_aug=True, use_bn=True, optimizer_name="sgd", epochs=None):
     directory = Path(directory)
     norm_layer = "BatchNorm, " if use_bn else ""
     if optimizer_name == "adamw":
@@ -96,7 +96,7 @@ def save_config(directory=CHECKPOINT_DIR, seed=SEED, use_aug=True, use_bn=True, 
         "lr": recorded_lr,
         "momentum": MOMENTUM,
         "weight_decay": recorded_decay,
-        "epochs": EPOCHS,
+        "epochs": EPOCHS if epochs is None else epochs,
         "batch_size": BATCH_SIZE,
         "seed": seed,
         "use_aug": use_aug,
@@ -286,7 +286,7 @@ def clip_gradients(grads, clip_value=1.0):
             g.raw()[:] *= scale
 
 
-def train(seed=SEED, use_aug=True, use_bn=True, checkpoint_dir=None, optimizer_name="sgd"):
+def train(seed=SEED, use_aug=True, use_bn=True, checkpoint_dir=None, optimizer_name="sgd", epochs=None):
     """
     Main training loop. Key design points:
       - Mean/std come from the unaugmented training set. Val is standardized
@@ -300,8 +300,12 @@ def train(seed=SEED, use_aug=True, use_bn=True, checkpoint_dir=None, optimizer_n
       - Dropout and BatchNorm are on for training batches and off before
         validation. Learning rate is halved when validation accuracy does not
         improve, and the best model is written after every improving epoch.
+      - When the module was built with CUDA, each training batch runs on the
+        device. Augmentation, the permutation, and the learning-rate halving
+        stay here. Host weights are copied back before validation and saving.
     """
     directory = CHECKPOINT_DIR if checkpoint_dir is None else Path(checkpoint_dir)
+    epoch_count = EPOCHS if epochs is None else epochs
     model_path = "best_model.bin" if checkpoint_dir is None else str(directory / "best_model.bin")
     seed_everything(seed)
 
@@ -314,11 +318,17 @@ def train(seed=SEED, use_aug=True, use_bn=True, checkpoint_dir=None, optimizer_n
     mean = np.mean(X_train, axis=(0, 2, 3), keepdims=True)
     std = np.std(X_train, axis=(0, 2, 3), keepdims=True)
     save_norm(mean, std, directory / "norm.npz")
-    save_config(directory, seed, use_aug, use_bn, optimizer_name)
+    save_config(directory, seed, use_aug, use_bn, optimizer_name, epoch_count)
 
     X_val = standardize(X_val, mean, std)
 
     net, loss, optimizer, dropout_layer, batch_norms = create_network(use_bn=use_bn, optimizer_name=optimizer_name)
+    trainer = None
+    if cpp.cuda_available():
+        if optimizer_name == "adamw":
+            trainer = cpp.DeviceTrainer("adamw", ADAMW_LR, ADAMW_WEIGHT_DECAY, CLIP)
+        else:
+            trainer = cpp.DeviceTrainer("sgd", LR, MOMENTUM, CLIP)
 
     params = net.parameters()
     grads = net.gradients()
@@ -331,7 +341,7 @@ def train(seed=SEED, use_aug=True, use_bn=True, checkpoint_dir=None, optimizer_n
     sample_weights = class_weights[y_train]
     sample_weights /= sample_weights.sum()
 
-    for epoch in range(EPOCHS):
+    for epoch in range(epoch_count):
         permutation = np.random.choice(len(X_train), size=len(X_train), replace=True, p=sample_weights)
         epoch_loss = 0.0
         batches = 0
@@ -339,35 +349,38 @@ def train(seed=SEED, use_aug=True, use_bn=True, checkpoint_dir=None, optimizer_n
 
         for i in range(0, len(X_train), BATCH_SIZE):
             if (i // BATCH_SIZE) % 40 == 0:
-                print(f"Epoch {epoch+1}/{EPOCHS}, Batch {i//BATCH_SIZE + 1}/{len(X_train)//BATCH_SIZE}")
+                print(f"Epoch {epoch+1}/{epoch_count}, Batch {i//BATCH_SIZE + 1}/{len(X_train)//BATCH_SIZE}")
 
             batch_indices = permutation[i:i+BATCH_SIZE]
 
             images = X_train[batch_indices]
             if use_aug:
                 images = augment_batch(images)
-            X_batch = standardize(images, mean, std)
-            y_batch = y_train_one_hot[batch_indices]
+            X_batch = np.ascontiguousarray(standardize(images, mean, std), dtype=np.float32)
+            y_batch = np.ascontiguousarray(y_train_one_hot[batch_indices], dtype=np.float32)
 
-            X_tensor = numpy_to_tensor(X_batch)
-            y_tensor = numpy_to_tensor(y_batch)
-
-            predictions = net.forward(X_tensor)
-            loss_value = loss.forward(predictions, y_tensor)
+            if trainer is not None:
+                loss_value = trainer.step(net, X_batch, y_batch)
+            else:
+                X_tensor = numpy_to_tensor(X_batch)
+                y_tensor = numpy_to_tensor(y_batch)
+                predictions = net.forward(X_tensor)
+                loss_value = loss.forward(predictions, y_tensor)
+                grad_loss = loss.backward()
+                net.backward(grad_loss)
+                clip_gradients(grads, clip_value=CLIP)
+                optimizer.update(params, grads)
             epoch_loss += loss_value
             batches += 1
 
-            grad_loss = loss.backward()
-            net.backward(grad_loss)
-            clip_gradients(grads, clip_value=CLIP)
-            optimizer.update(params, grads)
-
+        if trainer is not None:
+            trainer.copyParametersToHost(net)
         set_training(dropout_layer, batch_norms, False)
         avg_loss = epoch_loss / batches
         val_acc = evaluate(net, X_val, y_val)
         train_check_acc = evaluate(net, standardize(X_train[:2000], mean, std), y_train[:2000])
         print("Train accuracy:", train_check_acc)
-        print(f"Epoch {epoch+1}/{EPOCHS}, Validation Accuracy: {val_acc * 100:.2f}%, Loss: {avg_loss:.4f}, Time: {time.time() - start_time:.2f}s")
+        print(f"Epoch {epoch+1}/{epoch_count}, Validation Accuracy: {val_acc * 100:.2f}%, Loss: {avg_loss:.4f}, Time: {time.time() - start_time:.2f}s")
 
         if val_acc > best_acc:
             best_acc = val_acc
@@ -376,6 +389,8 @@ def train(seed=SEED, use_aug=True, use_bn=True, checkpoint_dir=None, optimizer_n
                 save_batch_norm(batch_norms, directory / "bn.npz")
         else:
             optimizer.setLearningRate(optimizer.getLearningRate() * 0.5)
+            if trainer is not None:
+                trainer.setLearningRate(optimizer.getLearningRate())
 
     return best_acc
 
