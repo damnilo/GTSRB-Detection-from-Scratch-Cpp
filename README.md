@@ -127,6 +127,15 @@ cmake ..
 cmake --build .
 ```
 
+The CPU image builds the same extension and runs the reference tests. It does not include CUDA or the GTSRB files. Mount a dataset at `/src/dataset` before training or official-test evaluation.
+
+```bash
+docker build -t gtsrb-cnn .
+docker run --rm gtsrb-cnn
+```
+
+The measured write-up is `docs/tech_report.md`.
+
 ---
 
 ## Training
@@ -168,7 +177,7 @@ python eval.py --checkpoint checkpoints/A/seed42 --device cpu
 python eval.py --checkpoint checkpoints/A/seed42 --device cuda
 ```
 
-The CUDA command needs a module built with `nvcc`. A checkpoint without BatchNorm writes `results/test_metrics_cuda.json`. A BatchNorm checkpoint writes `results/test_metrics_cuda_bn.json`. The first batch must match the CPU logits to `1e-4` before the official test runs. On a Tesla T4, `results/test_metrics_cuda.json` records 95.273% (12,033 / 12,630) and 27,096.176 images/s for `checkpoints/A/seed42`. `python gradcam.py` writes `results/failures.md` and the panels in `results/gradcam/`. The gallery checked in with this repository is checkpoint `checkpoints/C/seed42`: 679 of 12,630 test images are wrong, 38 of them read the 100 km/h sign as 120 km/h, and 14 read pedestrians as bicycles crossing.
+The CUDA command needs a module built with `nvcc`. A checkpoint without BatchNorm writes `results/test_metrics_cuda.json`. A BatchNorm checkpoint writes `results/test_metrics_cuda_bn.json`. The first batch must match the CPU logits to `1e-4` before the official test runs. On a Tesla T4, `results/test_metrics_cuda.json` records 95.273% (12,033 / 12,630) and 27,096.176 images/s for `checkpoints/A/seed42`. `results/test_metrics_cuda_bn.json` records 94.624% (11,951 / 12,630) and 20,809.659 images/s for `checkpoints/C/seed42`, the same accuracy and macro F1 as that checkpoint's CPU `metrics.json`. `python gradcam.py` writes `results/failures.md` and the panels in `results/gradcam/`. The gallery checked in with this repository is checkpoint `checkpoints/C/seed42`: 679 of 12,630 test images are wrong, 38 of them read the 100 km/h sign as 120 km/h, and 14 read pedestrians as bicycles crossing.
 
 ---
 
@@ -198,9 +207,18 @@ The same five variants and the same five seeds were trained again for 20 epochs 
 | D | yes | yes | SGD | 95.92 ± 0.64 | 94.34 ± 1.01 | 57.7 ± 12.3 | 53.2 ± 4.1 |
 | E | yes | yes | AdamW | 92.60 ± 1.17 | 90.37 ± 1.30 | 46.3 ± 3.2 | 68.0 ± 16.3 |
 
-D has the highest accuracy mean at 20 epochs, 0.26 points above A, with a standard deviation of 0.64. The 100 km/h sign is still read as 120 km/h more often for D (53.2) than for A (43.4). E remains last. The headline stays the 10-epoch A mean.
+Among A–E, D has the highest accuracy mean at 20 epochs, 0.26 points above A, with a standard deviation of 0.64. The 100 km/h sign is still read as 120 km/h more often for D (53.2) than for A (43.4). E remains last. The headline stays the 10-epoch A mean.
 
-Per-seed metrics for the 10-epoch runs live in `checkpoints/<variant>/seed<N>/metrics.json`. That aggregate is `results/ablation.json`. The 20-epoch aggregate is `results/ablation_e20.json`.
+`python ablate.py F 20` repeats D with rotation of at most 5 degrees and no blur. `python ablate.py G 42 20` repeats E for one seed with the AdamW learning rate set to 5e-4. Both are in `results/ablation_followup.json`. F is the mean ± sample standard deviation over seeds 42–46. G is that single seed, not a five-seed mean.
+
+| Variant | Augmentation | BatchNorm | Optimizer | Accuracy | Macro F1 | Class 27 recall | 7→8 |
+| --- | --- | --- | --- | ---: | ---: | ---: | ---: |
+| F | mild | yes | SGD | 96.49 ± 0.41 | 95.04 ± 1.11 | 61.7 ± 12.0 | 18.4 ± 12.0 |
+| G | yes | yes | AdamW, 5e-4 | 92.66 | 90.84 | 56.7 | 47 |
+
+F is 0.84 points above the 20-epoch A mean and 0.57 points above D. Its standard deviation is 0.41. The 100 km/h sign is read as 120 km/h 18.4 times, compared with 43.4 for A and 53.2 for D. G seed 42 scores 92.66%, next to the E mean of 92.60 ± 1.17. The headline stays the 10-epoch A mean, 95.06 ± 0.27.
+
+Per-seed metrics for the 10-epoch runs live in `checkpoints/<variant>/seed<N>/metrics.json`. That aggregate is `results/ablation.json`. The 20-epoch aggregate is `results/ablation_e20.json`. The follow-up aggregate is `results/ablation_followup.json`.
 
 `python robustness.py` repeats the official test of `checkpoints/A/seed42` after a fixed change to every test image. Pixels stay in [0, 1], the change is clipped back into that range, and the checkpoint's training-set mean and standard deviation are applied afterwards. Brightness adds a constant. Contrast is `(pixel - 0.5) * alpha + 0.5`. Blur is a Gaussian kernel; sigma 0 lets the 3×3 kernel set the width. ECE is the 15-bin expected calibration error of the softmax probability on the predicted class. This is one seed, not the five-seed mean above. The clean row is the same 95.27% (12,033 / 12,630) as that checkpoint's `metrics.json`.
 
@@ -259,6 +277,8 @@ The CPU matmul row includes allocating the result. On the multiply alone, copies
 One device epoch over `dataset/Train`, classes in order 0 to 42 with filenames sorted, dropout off, no augmentation, and the global gradient norm clipped at 5, finished 39,209 images in 613 batches. Mean loss was 24.8015. The epoch took 12.967 s. Softmax and the loss stayed on the host. That sentence is in `results/bench_cuda.md`.
 
 The official test of `checkpoints/A/seed42` is in `results/test_metrics_cuda.json`. Accuracy is 95.273% (12,033 / 12,630) and macro F1 is 92.629%, the same values as that checkpoint's CPU `metrics.json`. The first batch matched the CPU logits to `1e-4`. The timed pass took 466.117 ms (27,096.176 images/s): every test batch is uploaded, the kernels run, and the logits are downloaded, with the weights already on the device. The table above is the median of ten batch-64 runs.
+
+The official test of `checkpoints/C/seed42` is in `results/test_metrics_cuda_bn.json`. Accuracy is 94.624% (11,951 / 12,630) and macro F1 is 92.610%, the same values as that checkpoint's CPU `metrics.json`. The first batch matched the CPU logits to `1e-4`. The timed pass took 606.930 ms (20,809.659 images/s).
 
 ---
 
