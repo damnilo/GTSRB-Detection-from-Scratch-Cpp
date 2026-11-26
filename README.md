@@ -137,7 +137,7 @@ Run:
 python model.py
 ```
 
-The best-performing model is saved as `best_model.bin`, with `checkpoints/norm.npz` and `checkpoints/config.json`. `python ablate.py` trains variants A–E on seeds 42–46 and writes each run under `checkpoints/<variant>/seed<N>/`. A finished seed is skipped when its `metrics.json` already exists. Variant E is AdamW on the augmented BatchNorm model; A–D use SGD. `.gitignore` ignores every `best_model.bin` except `checkpoints/A/seed42/best_model.bin`. That run has no BatchNorm, so it has no `bn.npz`. `norm.npz`, `config.json`, and `metrics.json` are committed for the ablation.
+The best-performing model is saved as `best_model.bin`, with `checkpoints/norm.npz` and `checkpoints/config.json`. `python ablate.py` trains variants A–E on seeds 42–46 and writes each run under `checkpoints/<variant>/seed<N>/`. A finished seed is skipped when its `metrics.json` already exists. Variant E is AdamW on the augmented BatchNorm model; A–D use SGD. `python ablate.py F 20` is that same BatchNorm SGD model trained for 20 epochs, with rotation of at most 5 degrees and no blur. `python ablate.py G 42` is one seed of variant E with the AdamW learning rate set to 5e-4. F and G write `results/ablation_followup.json`. `.gitignore` ignores every `best_model.bin` except `checkpoints/A/seed42/best_model.bin`. That run has no BatchNorm, so it has no `bn.npz`. `norm.npz`, `config.json`, and `metrics.json` are committed for the ablation.
 
 ---
 

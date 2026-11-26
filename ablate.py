@@ -8,13 +8,19 @@ across seeds, with the sample standard deviation.
     python ablate.py 20
     python ablate.py C 42
     python ablate.py C 42 20
+    python ablate.py F 20
+    python ablate.py G 42
 
-A lone number trains every variant and every seed for that many epochs.
+A lone number trains A–E and every seed for that many epochs.
 It writes checkpoints/<variant>/e<epochs>/seed<N>/ and results/ablation_e<epochs>.json.
 Without a number the run uses model.py's epoch count and writes
 checkpoints/<variant>/seed<N>/ plus results/ablation.json.
 The third number is the epoch count for one variant and one seed.
-A finished run is skipped when its metrics.json is already present.
+F is D with rotation of at most 5 degrees and no blur. G is E with the
+AdamW learning rate set to 5e-4. For F and G, a second number below 42 is
+the epoch count for every seed: python ablate.py F 20. A number from the
+seed list is one seed. Both write results/ablation_followup.json and never
+the A–E files. A finished run is skipped when its metrics.json is already present.
 """
 
 import json
@@ -25,7 +31,7 @@ import numpy as np
 
 from eval import scores_from_confusion
 from load_dataset import NUM_CATEGORIES
-from model import CHECKPOINT_DIR, create_network, evaluate_with_confusion, load_batch_norm, load_norm_stats, set_training, standardize, train
+from model import CHECKPOINT_DIR, EPOCHS, create_network, evaluate_with_confusion, load_batch_norm, load_norm_stats, set_training, standardize, train
 from test import load_test_data
 
 import cpp
@@ -38,9 +44,22 @@ VARIANTS = {
     "D": {"use_aug": True, "use_bn": True, "optimizer_name": "sgd"},
     "E": {"use_aug": True, "use_bn": True, "optimizer_name": "adamw"},
 }
+FOLLOWUPS = {
+    "F": {"use_aug": True, "use_bn": True, "optimizer_name": "sgd", "aug": "mild"},
+    "G": {"use_aug": True, "use_bn": True, "optimizer_name": "adamw", "learning_rate": 5e-4},
+}
 SEEDS = (42, 43, 44, 45, 46)
 SUMMARY_KEYS = ("accuracy", "macro_f1", "class_27_recall", "confusions_7_to_8")
 ROOT = Path(__file__).resolve().parent
+TRAIN_KEYS = ("use_aug", "use_bn", "optimizer_name", "aug", "learning_rate")
+
+
+def variant_flags(name):
+    if name in VARIANTS:
+        return VARIANTS[name]
+    return FOLLOWUPS[name]
+
+
 def run_dir(variant, seed, epochs):
     folder = CHECKPOINT_DIR / variant
     if epochs is not None:
@@ -48,8 +67,13 @@ def run_dir(variant, seed, epochs):
     return folder / f"seed{seed}"
 
 
-def results_path(epochs):
-    name = "ablation.json" if epochs is None else f"ablation_e{epochs}.json"
+def results_path(epochs, followup):
+    if followup:
+        name = "ablation_followup.json"
+    elif epochs is None:
+        name = "ablation.json"
+    else:
+        name = f"ablation_e{epochs}.json"
     return ROOT / "results" / name
 
 
@@ -84,12 +108,16 @@ def summarize(runs):
         by_variant.setdefault(run["variant"], []).append(run)
     summary = {}
     for variant, rows in by_variant.items():
+        flags = variant_flags(variant)
         summary[variant] = {
             "seeds": [row["seed"] for row in rows],
-            "use_aug": VARIANTS[variant]["use_aug"],
-            "use_bn": VARIANTS[variant]["use_bn"],
-            "optimizer": VARIANTS[variant]["optimizer_name"],
+            "use_aug": flags["use_aug"],
+            "aug": flags.get("aug", "full" if flags["use_aug"] else "none"),
+            "use_bn": flags["use_bn"],
+            "optimizer": flags["optimizer_name"],
         }
+        if "learning_rate" in flags:
+            summary[variant]["learning_rate"] = flags["learning_rate"]
         for key in SUMMARY_KEYS:
             mean, std = mean_std([row[key] for row in rows])
             summary[variant][key] = {"mean": mean, "std": std}
@@ -103,7 +131,7 @@ def format_pair(stats, scale):
 def print_summary(summary):
     print()
     print(f"{'variant':<8} {'accuracy %':>16} {'macro F1 %':>16} {'recall 27 %':>16} {'7→8':>14}")
-    for variant in VARIANTS:
+    for variant in list(VARIANTS) + list(FOLLOWUPS):
         if variant not in summary:
             continue
         row = summary[variant]
@@ -121,11 +149,16 @@ def merge_runs(runs, path):
     existing = []
     if path.is_file():
         existing = json.loads(path.read_text(encoding="utf-8")).get("runs", [])
-    by_key = {(row["variant"], row["seed"]): row for row in existing}
+    def row_key(row):
+        return (row["variant"], row["seed"], row.get("epochs"))
+
+    by_key = {row_key(row): row for row in existing}
     for row in runs:
-        by_key[(row["variant"], row["seed"])] = row
-    order = [(variant, seed) for variant in VARIANTS for seed in SEEDS]
-    return [by_key[key] for key in order if key in by_key]
+        by_key[row_key(row)] = row
+    names = list(VARIANTS) + list(FOLLOWUPS)
+    order = [(variant, seed) for variant in names for seed in SEEDS]
+    ranked = sorted(by_key, key=lambda key: (order.index((key[0], key[1])), key[2] or 0))
+    return [by_key[key] for key in ranked]
 
 
 def parse_epochs(text):
@@ -136,33 +169,41 @@ def parse_epochs(text):
 
 def selected_runs(argv):
     usage = "Usage: python ablate.py [epochs] | python ablate.py [variant] [seed] [epochs]"
+    known = list(VARIANTS) + list(FOLLOWUPS)
     variants = list(VARIANTS)
     seeds = list(SEEDS)
     epochs = None
     if len(argv) > 4:
         raise SystemExit(usage)
     if len(argv) == 2 and argv[1].isdigit():
-        return [(variant, seed) for variant in variants for seed in seeds], parse_epochs(argv[1])
+        pairs = [(variant, seed) for variant in variants for seed in seeds]
+        return pairs, parse_epochs(argv[1]), False
+    if len(argv) == 3 and argv[1].upper() in FOLLOWUPS and argv[2].isdigit() and int(argv[2]) < min(SEEDS):
+        variant = argv[1].upper()
+        pairs = [(variant, seed) for seed in seeds]
+        return pairs, parse_epochs(argv[2]), True
     if len(argv) >= 2:
         variant = argv[1].upper()
-        if variant not in VARIANTS:
-            raise SystemExit(f"Unknown variant {argv[1]}. Choose one of {', '.join(VARIANTS)}.")
+        if variant not in known:
+            raise SystemExit(f"Unknown variant {argv[1]}. Choose one of {', '.join(known)}.")
         variants = [variant]
     if len(argv) >= 3:
         seeds = [int(argv[2])]
     if len(argv) == 4:
         epochs = parse_epochs(argv[3])
-    return [(variant, seed) for variant in variants for seed in seeds], epochs
+    pairs = [(variant, seed) for variant in variants for seed in seeds]
+    followup = all(variant in FOLLOWUPS for variant, _seed in pairs)
+    return pairs, epochs, followup
 
 
 def main():
-    pairs, epochs = selected_runs(sys.argv)
-    path = results_path(epochs)
+    pairs, epochs, followup = selected_runs(sys.argv)
+    path = results_path(epochs, followup)
     runs = []
     for variant, seed in pairs:
         directory = run_dir(variant, seed, epochs)
         metrics_path = directory / "metrics.json"
-        flags = VARIANTS[variant]
+        flags = variant_flags(variant)
         if metrics_path.is_file():
             print(f"Skipping {variant} seed {seed}; {metrics_path} already exists.")
             metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
@@ -172,14 +213,14 @@ def main():
                 f"bn={flags['use_bn']} optimizer={flags['optimizer_name']} "
                 f"epochs={epochs if epochs is not None else 'default'}"
             )
-            train_flags = dict(flags)
+            train_flags = {key: flags[key] for key in TRAIN_KEYS if key in flags}
             if epochs is not None:
                 train_flags["epochs"] = epochs
             train(seed=seed, checkpoint_dir=directory, **train_flags)
             metrics = evaluate_run(directory, flags["use_bn"])
             metrics.update({"variant": variant, "seed": seed, **flags})
-            if epochs is not None:
-                metrics["epochs"] = epochs
+            if epochs is not None or followup:
+                metrics["epochs"] = EPOCHS if epochs is None else epochs
             directory.mkdir(parents=True, exist_ok=True)
             metrics_path.write_text(json.dumps(metrics, indent=2) + "\n", encoding="utf-8")
             print(
