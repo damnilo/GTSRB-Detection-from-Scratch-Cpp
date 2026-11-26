@@ -76,11 +76,11 @@ def save_norm(mean, std, path=NORM_PATH):
     np.savez(str(path), mean=np.asarray(mean, dtype=np.float32), std=np.asarray(std, dtype=np.float32))
 
 
-def save_config(directory=CHECKPOINT_DIR, seed=SEED, use_aug=True, use_bn=True, optimizer_name="sgd", epochs=None):
+def save_config(directory=CHECKPOINT_DIR, seed=SEED, use_aug=True, use_bn=True, optimizer_name="sgd", epochs=None, aug="full", learning_rate=None):
     directory = Path(directory)
     norm_layer = "BatchNorm, " if use_bn else ""
     if optimizer_name == "adamw":
-        recorded_lr = ADAMW_LR
+        recorded_lr = ADAMW_LR if learning_rate is None else float(learning_rate)
         recorded_decay = ADAMW_WEIGHT_DECAY
     else:
         recorded_lr = LR
@@ -100,6 +100,7 @@ def save_config(directory=CHECKPOINT_DIR, seed=SEED, use_aug=True, use_bn=True, 
         "batch_size": BATCH_SIZE,
         "seed": seed,
         "use_aug": use_aug,
+        "aug": aug,
         "use_bn": use_bn,
         "clip_value": CLIP,
         "image_size": 32,
@@ -108,10 +109,17 @@ def save_config(directory=CHECKPOINT_DIR, seed=SEED, use_aug=True, use_bn=True, 
     directory.mkdir(parents=True, exist_ok=True)
     (directory / "config.json").write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
 
-def augment_image(chw):
-    """Geometric and photometric jitter on one CHW image in [0, 1]."""
+def augment_image(chw, aug="full"):
+    """Geometric and photometric jitter on one CHW image in [0, 1].
+
+    full rotates by up to 15 degrees and sometimes blurs. mild rotates by up
+    to 5 degrees and does not blur. Scale, shift, and brightness stay the same.
+    """
+    if aug not in ("full", "mild"):
+        raise ValueError(f"Unknown augmentation {aug}")
     hwc = np.ascontiguousarray(np.moveaxis(chw, 0, -1))
-    angle = np.random.uniform(-15.0, 15.0)
+    angle_limit = 5.0 if aug == "mild" else 15.0
+    angle = np.random.uniform(-angle_limit, angle_limit)
     scale = np.random.uniform(0.9, 1.1)
     shift_x = np.random.uniform(-2.0, 2.0)
     shift_y = np.random.uniform(-2.0, 2.0)
@@ -128,16 +136,16 @@ def augment_image(chw):
         beta = np.random.uniform(-0.1, 0.1)
         hwc = alpha * hwc + beta
 
-    if np.random.random() < 0.3:
+    if aug == "full" and np.random.random() < 0.3:
         hwc = cv2.GaussianBlur(hwc, (3, 3), 0)
 
     hwc = np.clip(hwc, 0.0, 1.0)
     return np.moveaxis(hwc, -1, 0)
 
 
-def augment_batch(batch):
+def augment_batch(batch, aug="full"):
     """Augment each NCHW image. The caller standardizes the result."""
-    return np.stack([augment_image(image) for image in batch])
+    return np.stack([augment_image(image, aug) for image in batch])
 
 def load_norm_stats(path=None):
     """Load training-set mean/std. If the default file is missing, recompute it from the train split.
@@ -209,7 +217,7 @@ def build_layers(use_bn=True):
     return layers, dropout_layer, batch_norms
 
 
-def create_network(use_bn=True, optimizer_name="sgd"):
+def create_network(use_bn=True, optimizer_name="sgd", learning_rate=None):
     """
     Builds the model: two conv blocks, a Flatten, Dense, Dropout, and SoftMax.
 
@@ -224,8 +232,11 @@ def create_network(use_bn=True, optimizer_name="sgd"):
 
     loss = cpp.CrossEntropy()
     if optimizer_name == "adamw":
-        optimizer = cpp.AdamW(ADAMW_LR, ADAMW_WEIGHT_DECAY)
+        lr = ADAMW_LR if learning_rate is None else float(learning_rate)
+        optimizer = cpp.AdamW(lr, ADAMW_WEIGHT_DECAY)
     elif optimizer_name == "sgd":
+        if learning_rate is not None:
+            raise ValueError("learning_rate applies to AdamW.")
         optimizer = cpp.SGD(LR, MOMENTUM)
     else:
         raise ValueError(f"Unknown optimizer {optimizer_name}")
@@ -286,7 +297,7 @@ def clip_gradients(grads, clip_value=1.0):
             g.raw()[:] *= scale
 
 
-def train(seed=SEED, use_aug=True, use_bn=True, checkpoint_dir=None, optimizer_name="sgd", epochs=None):
+def train(seed=SEED, use_aug=True, use_bn=True, checkpoint_dir=None, optimizer_name="sgd", epochs=None, aug="full", learning_rate=None):
     """
     Main training loop. Key design points:
       - Mean/std come from the unaugmented training set. Val is standardized
@@ -318,15 +329,21 @@ def train(seed=SEED, use_aug=True, use_bn=True, checkpoint_dir=None, optimizer_n
     mean = np.mean(X_train, axis=(0, 2, 3), keepdims=True)
     std = np.std(X_train, axis=(0, 2, 3), keepdims=True)
     save_norm(mean, std, directory / "norm.npz")
-    save_config(directory, seed, use_aug, use_bn, optimizer_name, epoch_count)
+    save_config(
+        directory, seed, use_aug, use_bn, optimizer_name, epoch_count,
+        aug if use_aug else "none", learning_rate,
+    )
 
     X_val = standardize(X_val, mean, std)
 
-    net, loss, optimizer, dropout_layer, batch_norms = create_network(use_bn=use_bn, optimizer_name=optimizer_name)
+    net, loss, optimizer, dropout_layer, batch_norms = create_network(
+        use_bn=use_bn, optimizer_name=optimizer_name, learning_rate=learning_rate,
+    )
     trainer = None
+    adamw_lr = ADAMW_LR if learning_rate is None else float(learning_rate)
     if cpp.cuda_available():
         if optimizer_name == "adamw":
-            trainer = cpp.DeviceTrainer("adamw", ADAMW_LR, ADAMW_WEIGHT_DECAY, CLIP)
+            trainer = cpp.DeviceTrainer("adamw", adamw_lr, ADAMW_WEIGHT_DECAY, CLIP)
         else:
             trainer = cpp.DeviceTrainer("sgd", LR, MOMENTUM, CLIP)
 
@@ -355,7 +372,7 @@ def train(seed=SEED, use_aug=True, use_bn=True, checkpoint_dir=None, optimizer_n
 
             images = X_train[batch_indices]
             if use_aug:
-                images = augment_batch(images)
+                images = augment_batch(images, aug)
             X_batch = np.ascontiguousarray(standardize(images, mean, std), dtype=np.float32)
             y_batch = np.ascontiguousarray(y_train_one_hot[batch_indices], dtype=np.float32)
 
