@@ -4,13 +4,16 @@ Variants share the training-set normalization protocol. Validation and test
 images are never augmented. The reported number for a variant is the mean
 across seeds, with the sample standard deviation.
 
+    python ablate.py
+    python ablate.py 20
     python ablate.py C 42
     python ablate.py C 42 20
 
-Without a third number the run uses model.py's epoch count and writes
+A lone number trains every variant and every seed for that many epochs.
+It writes checkpoints/<variant>/e<epochs>/seed<N>/ and results/ablation_e<epochs>.json.
+Without a number the run uses model.py's epoch count and writes
 checkpoints/<variant>/seed<N>/ plus results/ablation.json.
-The third number is the epoch count. It writes
-checkpoints/<variant>/e<epochs>/seed<N>/ and results/ablation_e<epochs>.json.
+The third number is the epoch count for one variant and one seed.
 A finished run is skipped when its metrics.json is already present.
 """
 
@@ -125,12 +128,21 @@ def merge_runs(runs, path):
     return [by_key[key] for key in order if key in by_key]
 
 
+def parse_epochs(text):
+    if not text.isdigit() or int(text) < 1:
+        raise SystemExit("Epoch count must be at least 1.")
+    return int(text)
+
+
 def selected_runs(argv):
+    usage = "Usage: python ablate.py [epochs] | python ablate.py [variant] [seed] [epochs]"
     variants = list(VARIANTS)
     seeds = list(SEEDS)
     epochs = None
     if len(argv) > 4:
-        raise SystemExit("Usage: python ablate.py [variant] [seed] [epochs]")
+        raise SystemExit(usage)
+    if len(argv) == 2 and argv[1].isdigit():
+        return [(variant, seed) for variant in variants for seed in seeds], parse_epochs(argv[1])
     if len(argv) >= 2:
         variant = argv[1].upper()
         if variant not in VARIANTS:
@@ -139,9 +151,7 @@ def selected_runs(argv):
     if len(argv) >= 3:
         seeds = [int(argv[2])]
     if len(argv) == 4:
-        epochs = int(argv[3])
-        if epochs < 1:
-            raise SystemExit("Epoch count must be at least 1.")
+        epochs = parse_epochs(argv[3])
     return [(variant, seed) for variant in variants for seed in seeds], epochs
 
 
