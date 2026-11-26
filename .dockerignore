@@ -1,0 +1,9 @@
+.git
+.github
+.venv
+build
+dataset
+__pycache__
+*.pyc
+*.pyd
+IMPROVEMENT.md
